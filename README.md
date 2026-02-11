@@ -15,7 +15,7 @@ A lightweight desktop viewer and editor for Anki `.apkg` flashcard decks. Open a
 ## Install
 
 ```bash
-git clone https://github.com/your-username/ankiLite.git
+git clone https://github.com/angelmz/ankiLite
 cd ankiLite
 pip install -r requirements.txt
 ```
