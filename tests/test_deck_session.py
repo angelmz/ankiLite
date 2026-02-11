@@ -174,6 +174,103 @@ class TestDeckSession:
         assert not error, f"Cross-thread remove_image raised: {error[0]}"
         assert result.get("ok") is True
 
+    def test_update_field_changes_text(self, apkg_file):
+        session = DeckSession(apkg_file)
+        session.open()
+        result = session.update_field(1, "Back", "Lyon")
+        assert result["ok"] is True
+        row = session.conn.execute(
+            "SELECT flds FROM notes WHERE id = 1"
+        ).fetchone()
+        assert row[0].split("\x1f")[1] == "Lyon"
+        session.close()
+
+    def test_update_field_preserves_other_fields(self, apkg_file):
+        session = DeckSession(apkg_file)
+        session.open()
+        session.update_field(1, "Back", "Lyon")
+        row = session.conn.execute(
+            "SELECT flds FROM notes WHERE id = 1"
+        ).fetchone()
+        fields = row[0].split("\x1f")
+        assert fields[0] == "Capital of France?"
+        assert fields[1] == "Lyon"
+        session.close()
+
+    def test_update_field_nonexistent_note(self, apkg_file):
+        session = DeckSession(apkg_file)
+        session.open()
+        result = session.update_field(999, "Back", "nope")
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+        session.close()
+
+    def test_update_field_nonexistent_field(self, apkg_file):
+        session = DeckSession(apkg_file)
+        session.open()
+        result = session.update_field(1, "NoSuchField", "nope")
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+        session.close()
+
+    def test_update_field_roundtrip_export(self, apkg_file, tmp_path):
+        session = DeckSession(apkg_file)
+        session.open()
+        session.update_field(1, "Back", "Marseille")
+        out = str(tmp_path / "edited.apkg")
+        session.export_apkg(out)
+        session.close()
+
+        session2 = DeckSession(out)
+        cards = session2.open()
+        assert cards[0]["fields"]["Back"] == "Marseille"
+        session2.close()
+
+    def test_export_overwrite_original(self, apkg_file):
+        """Exporting to the original apkg_path works (temp copy is independent)."""
+        session = DeckSession(apkg_file)
+        session.open()
+        session.update_field(1, "Back", "Nice")
+        result = session.export_apkg(session.apkg_path)
+        assert result["ok"] is True
+        session.close()
+
+        session2 = DeckSession(apkg_file)
+        cards = session2.open()
+        assert cards[0]["fields"]["Back"] == "Nice"
+        session2.close()
+
+    def test_open_returns_timestamps(self, apkg_file):
+        session = DeckSession(apkg_file)
+        try:
+            cards = session.open()
+            assert "created_ts" in cards[0]
+            assert "mod_ts" in cards[0]
+        finally:
+            session.close()
+
+    def test_timestamps_with_realistic_ids(self, tmp_path):
+        p = str(tmp_path / "ts.apkg")
+        _make_apkg(p, cards=[(1678901234567, 1, "Q\x1fA")])
+        session = DeckSession(p)
+        try:
+            cards = session.open()
+            assert cards[0]["created_ts"] == 1678901234
+        finally:
+            session.close()
+
+    def test_mod_ts_updates_after_edit(self, apkg_file):
+        session = DeckSession(apkg_file)
+        try:
+            session.open()
+            session.update_field(1, "Back", "Updated")
+            row = session.conn.execute(
+                "SELECT mod FROM notes WHERE id = 1"
+            ).fetchone()
+            assert row[0] > 0
+        finally:
+            session.close()
+
     def test_close_cleans_up(self, apkg_file):
         session = DeckSession(apkg_file)
         session.open()

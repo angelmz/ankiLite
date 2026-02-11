@@ -146,12 +146,18 @@ def _media_to_base64(filename, tmp_dir, media_map):
     return f"data:{mime};base64,{data}"
 
 
-def _inline_images(html, tmp_dir, media_map):
-    """Replace <img src="filename"> references with inline base64 data URIs."""
+def _inline_images(html, tmp_dir, media_map, uri_to_filename=None):
+    """Replace <img src="filename"> references with inline base64 data URIs.
+
+    If *uri_to_filename* dict is provided, records data_uri → filename mappings
+    so they can be reversed later (de-inlining).
+    """
     def replace_src(match):
         filename = match.group(1)
         data_uri = _media_to_base64(filename, tmp_dir, media_map)
         if data_uri:
+            if uri_to_filename is not None:
+                uri_to_filename[data_uri] = filename
             return f'src="{data_uri}"'
         return match.group(0)
 
@@ -178,6 +184,7 @@ class DeckSession:
         self.media_map = {}
         self.models = {}
         self._next_media_key = 0
+        self._uri_to_filename = {}  # data_uri → media filename for de-inlining
 
     def open(self):
         """Extract .apkg, open DB, parse cards. Returns list of card dicts."""
@@ -198,12 +205,13 @@ class DeckSession:
         else:
             self._next_media_key = 0
 
-        notes = self.conn.execute("SELECT id, mid, flds FROM notes").fetchall()
+        notes = self.conn.execute("SELECT id, mid, flds, mod FROM notes").fetchall()
         cards = []
         for note in notes:
             note_id = note[0]
             mid = note[1]
             flds_raw = note[2]
+            mod_ts = note[3]
 
             model = self.models.get(mid)
             if model is None:
@@ -216,13 +224,16 @@ class DeckSession:
             for i, name in enumerate(field_names):
                 val = field_values[i] if i < len(field_values) else ""
                 val = _strip_sound(val)
-                val = _inline_images(val, self.tmp_dir, self.media_map)
+                val = _inline_images(val, self.tmp_dir, self.media_map,
+                                     self._uri_to_filename)
                 fields[name] = val
 
             cards.append({
                 "note_id": note_id,
                 "model": model["name"],
                 "fields": fields,
+                "created_ts": note_id // 1000,
+                "mod_ts": mod_ts,
             })
 
         return cards
@@ -287,6 +298,9 @@ class DeckSession:
         )
         self.conn.commit()
 
+        # Register for de-inlining
+        self._uri_to_filename[data_uri] = media_filename
+
         return {"ok": True, "data_uri": data_uri}
 
     def remove_image(self, note_id, field_name, image_index):
@@ -322,6 +336,52 @@ class DeckSession:
 
         match = matches[image_index]
         field_values[field_idx] = field_text[:match.start()] + field_text[match.end():]
+
+        new_flds = "\x1f".join(field_values)
+        self.conn.execute(
+            "UPDATE notes SET flds = ?, mod = ?, usn = -1 WHERE id = ?",
+            (new_flds, int(time.time()), note_id),
+        )
+        self.conn.commit()
+        return {"ok": True}
+
+    def _deinline_field(self, html):
+        """Replace base64 data URIs back to media filenames before storing."""
+        def replace_uri(match):
+            uri = match.group(1)
+            filename = self._uri_to_filename.get(uri)
+            if filename:
+                return f'src="{filename}"'
+            return match.group(0)
+
+        return re.sub(r'src="(data:[^"]+)"', replace_uri, html)
+
+    def update_field(self, note_id, field_name, new_value):
+        """Update a single field's value for a note. De-inlines images first."""
+        row = self.conn.execute(
+            "SELECT mid, flds FROM notes WHERE id = ?", (note_id,)
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": "Note not found"}
+
+        mid = row[0]
+        flds_raw = row[1]
+        model = self.models.get(mid)
+        if model is None:
+            return {"ok": False, "error": "Model not found"}
+
+        field_values = flds_raw.split("\x1f")
+        field_names = model["fields"]
+
+        try:
+            field_idx = field_names.index(field_name)
+        except ValueError:
+            return {"ok": False, "error": f"Field '{field_name}' not found"}
+
+        while len(field_values) <= field_idx:
+            field_values.append("")
+
+        field_values[field_idx] = self._deinline_field(new_value)
 
         new_flds = "\x1f".join(field_values)
         self.conn.execute(

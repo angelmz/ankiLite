@@ -23,9 +23,31 @@
       <div id="sidebar-header">
         <h2 id="deck-title">Cards</h2>
         <div id="sidebar-actions">
-          <button id="btn-export" title="Export modified deck">Export</button>
+          <div id="save-group">
+            <button id="btn-save" title="Save deck">Save</button>
+            <button id="btn-save-dropdown" title="Save options">&#9662;</button>
+            <div id="save-dropdown" class="hidden">
+              <button id="save-overwrite">Overwrite original</button>
+              <button id="save-copy">Save as copy...</button>
+            </div>
+          </div>
+          <button id="btn-settings" title="Settings">&#9881;</button>
           <button id="btn-back" title="Load another deck">New Deck</button>
         </div>
+      </div>
+      <div id="sidebar-toolbar">
+        <select id="filter-images" title="Filter by images">
+          <option value="all">All cards</option>
+          <option value="with-images">With images</option>
+          <option value="without-images">Without images</option>
+        </select>
+        <select id="sort-order" title="Sort order">
+          <option value="original">Original order</option>
+          <option value="created-desc">Created: newest</option>
+          <option value="created-asc">Created: oldest</option>
+          <option value="modified-desc">Modified: newest</option>
+          <option value="modified-asc">Modified: oldest</option>
+        </select>
       </div>
       <div id="card-list"></div>
     </div>
@@ -34,6 +56,21 @@
         <div id="card-fields"></div>
       </div>
       <div id="nav-hint">&larr; &rarr; navigate cards &middot; click an image and press &loz; backspace to remove it</div>
+    </div>
+  </div>
+
+  <!-- Settings overlay -->
+  <div id="settings-overlay" class="hidden">
+    <div id="settings-panel">
+      <h2>Settings</h2>
+      <div class="settings-section">
+        <label class="settings-label">Default save behavior</label>
+        <div class="settings-radios">
+          <label><input type="radio" name="save_mode" value="copy"> Save as copy</label>
+          <label><input type="radio" name="save_mode" value="overwrite"> Overwrite original</label>
+        </div>
+      </div>
+      <button id="btn-settings-done">Done</button>
     </div>
   </div>
 

@@ -8,15 +8,90 @@
   const loading = document.getElementById("loading");
   const btnOpen = document.getElementById("btn-open");
   const btnBack = document.getElementById("btn-back");
-  const btnExport = document.getElementById("btn-export");
+  const btnSave = document.getElementById("btn-save");
+  const btnSaveDropdown = document.getElementById("btn-save-dropdown");
+  const saveDropdown = document.getElementById("save-dropdown");
+  const btnSettings = document.getElementById("btn-settings");
+  const settingsOverlay = document.getElementById("settings-overlay");
+  const btnSettingsDone = document.getElementById("btn-settings-done");
   const deckTitle = document.getElementById("deck-title");
   const cardList = document.getElementById("card-list");
   const cardFields = document.getElementById("card-fields");
+  const filterImages = document.getElementById("filter-images");
+  const sortOrder = document.getElementById("sort-order");
 
   let cards = [];
+  let displayCards = [];
   let currentIndex = -1;
   let selectedFieldName = null;
   let selectedImg = null;
+  let editingField = null;
+
+  // ── Filter & sort helpers ──
+
+  function cardHasImages(card) {
+    var fields = card.fields;
+    for (var key in fields) {
+      if (fields[key] && fields[key].indexOf("<img") !== -1) return true;
+    }
+    return false;
+  }
+
+  function applyFilterSort() {
+    var filter = filterImages.value;
+    var sort = sortOrder.value;
+
+    // Filter
+    var filtered;
+    if (filter === "with-images") {
+      filtered = cards.filter(cardHasImages);
+    } else if (filter === "without-images") {
+      filtered = cards.filter(function (c) { return !cardHasImages(c); });
+    } else {
+      filtered = cards.slice();
+    }
+
+    // Sort
+    if (sort === "created-desc") {
+      filtered.sort(function (a, b) { return b.created_ts - a.created_ts; });
+    } else if (sort === "created-asc") {
+      filtered.sort(function (a, b) { return a.created_ts - b.created_ts; });
+    } else if (sort === "modified-desc") {
+      filtered.sort(function (a, b) { return b.mod_ts - a.mod_ts; });
+    } else if (sort === "modified-asc") {
+      filtered.sort(function (a, b) { return a.mod_ts - b.mod_ts; });
+    }
+    // "original" keeps the array order from cards.slice() or filtered
+
+    displayCards = filtered;
+
+    // Update title
+    if (filter !== "all") {
+      deckTitle.textContent = displayCards.length + " of " + cards.length + " cards";
+    } else {
+      deckTitle.textContent = cards.length + " cards";
+    }
+
+    buildSidebar();
+  }
+
+  function restoreSelection(prevNoteId) {
+    if (displayCards.length === 0) {
+      currentIndex = -1;
+      cardFields.innerHTML = "";
+      return;
+    }
+    var found = -1;
+    if (prevNoteId != null) {
+      for (var i = 0; i < displayCards.length; i++) {
+        if (displayCards[i].note_id === prevNoteId) {
+          found = i;
+          break;
+        }
+      }
+    }
+    showCard(found >= 0 ? found : 0);
+  }
 
   // ── Toast notifications ──
 
@@ -80,13 +155,55 @@
     });
   }
 
+  // ── Inline editing helpers ──
+
+  function saveFieldOnBlur(el, fieldName) {
+    editingField = null;
+    var card = displayCards[currentIndex];
+    if (!card) return;
+    var newHtml = el.innerHTML;
+    var oldHtml = card.fields[fieldName];
+    if (newHtml === oldHtml) return;
+
+    card.fields[fieldName] = newHtml;
+    pywebview.api.update_field(card.note_id, fieldName, newHtml)
+      .then(function (res) {
+        if (!res.ok) {
+          showToast("Save failed: " + res.error);
+          return;
+        }
+      });
+
+    // Rebuild sidebar if first or second field changed
+    var fieldNames = Object.keys(card.fields);
+    if (fieldName === fieldNames[0] || fieldName === fieldNames[1]) {
+      updateSidebarItem(currentIndex);
+    }
+  }
+
+  function updateSidebarItem(index) {
+    var card = displayCards[index];
+    var fieldNames = Object.keys(card.fields);
+    var front = card.fields[fieldNames[0]] || "";
+    var frontText = stripHtml(front).trim().substring(0, 80) || "(empty)";
+    var sub = fieldNames.length > 1
+      ? stripHtml(card.fields[fieldNames[1]] || "").trim().substring(0, 60)
+      : "";
+    var items = cardList.querySelectorAll(".card-item");
+    if (items[index]) {
+      items[index].innerHTML =
+        '<div class="card-item-title">' + escapeHtml(frontText) + '</div>' +
+        (sub ? '<div class="card-item-sub">' + escapeHtml(sub) + '</div>' : "");
+    }
+  }
+
   // ── Card display ──
 
   function showCard(index) {
-    if (index < 0 || index >= cards.length) return;
+    if (index < 0 || index >= displayCards.length) return;
     currentIndex = index;
 
-    const card = cards[index];
+    const card = displayCards[index];
     const fieldNames = Object.keys(card.fields);
 
     let html = "";
@@ -97,15 +214,22 @@
             '<span>' + escapeHtml(name) + '</span>' +
             '<button class="btn-upload" data-field="' + escapeHtml(name) + '" title="Add image from file">+img</button>' +
           '</div>' +
-          '<div class="field-value" data-field-name="' + escapeHtml(name) + '">' +
+          '<div class="field-value" contenteditable="true" data-field-name="' + escapeHtml(name) + '">' +
             renderContent(card.fields[name]) +
           '</div>' +
         '</div>';
     }
     cardFields.innerHTML = html;
 
-    // Bind field click for selection
+    // Bind field focus/blur for inline editing
     document.querySelectorAll(".field-value").forEach(function (el) {
+      el.addEventListener("focus", function () {
+        editingField = el.dataset.fieldName;
+        selectField(el.dataset.fieldName);
+      });
+      el.addEventListener("blur", function () {
+        saveFieldOnBlur(el, el.dataset.fieldName);
+      });
       el.addEventListener("click", function () {
         selectField(el.dataset.fieldName);
       });
@@ -129,6 +253,7 @@
 
     // Clear image selection when switching cards
     clearImgSelection();
+    editingField = null;
 
     // Auto-select last field (typically the answer/back field)
     if (fieldNames.length > 0) {
@@ -155,7 +280,14 @@
 
   function buildSidebar() {
     cardList.innerHTML = "";
-    cards.forEach(function (card, i) {
+    if (displayCards.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "card-list-empty";
+      empty.textContent = "No cards match";
+      cardList.appendChild(empty);
+      return;
+    }
+    displayCards.forEach(function (card, i) {
       const fieldNames = Object.keys(card.fields);
       const front = card.fields[fieldNames[0]] || "";
       const frontText = stripHtml(front).trim().substring(0, 80) || "(empty)";
@@ -173,11 +305,26 @@
     });
   }
 
+  // ── Filter/sort event listeners ──
+
+  filterImages.addEventListener("change", function () {
+    var prevNoteId = displayCards[currentIndex] ? displayCards[currentIndex].note_id : null;
+    applyFilterSort();
+    restoreSelection(prevNoteId);
+  });
+
+  sortOrder.addEventListener("change", function () {
+    var prevNoteId = displayCards[currentIndex] ? displayCards[currentIndex].note_id : null;
+    applyFilterSort();
+    restoreSelection(prevNoteId);
+  });
+
   // ── Image paste handler ──
 
   document.addEventListener("paste", function (e) {
     if (viewer.classList.contains("hidden")) return;
     if (currentIndex < 0 || !selectedFieldName) return;
+    if (editingField) return; // let normal text paste work
 
     var items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
@@ -198,7 +345,7 @@
     reader.onload = function () {
       // result is "data:<mime>;base64,<data>"
       var base64Data = reader.result.split(",")[1];
-      var card = cards[currentIndex];
+      var card = displayCards[currentIndex];
       pywebview.api.paste_image(card.note_id, selectedFieldName, base64Data, mimeType)
         .then(function (res) {
           if (!res.ok) {
@@ -224,6 +371,12 @@
             fieldEl.appendChild(img);
           }
           showToast("Image pasted");
+          // Re-apply filter if active (card may now match/unmatch image filter)
+          if (filterImages.value !== "all") {
+            var prevNoteId = card.note_id;
+            applyFilterSort();
+            restoreSelection(prevNoteId);
+          }
         });
     };
     reader.readAsDataURL(blob);
@@ -233,7 +386,7 @@
 
   function handleUpload(fieldName) {
     if (currentIndex < 0) return;
-    var card = cards[currentIndex];
+    var card = displayCards[currentIndex];
     pywebview.api.upload_image(card.note_id, fieldName)
       .then(function (res) {
         if (!res.ok) {
@@ -257,6 +410,12 @@
           fieldEl.appendChild(img);
         }
         showToast("Image added");
+        // Re-apply filter if active
+        if (filterImages.value !== "all") {
+          var prevNoteId = card.note_id;
+          applyFilterSort();
+          restoreSelection(prevNoteId);
+        }
       });
   }
 
@@ -271,7 +430,7 @@
     var imageIndex = Array.prototype.indexOf.call(imgs, selectedImg);
     if (imageIndex < 0) return;
 
-    var card = cards[currentIndex];
+    var card = displayCards[currentIndex];
     var imgToRemove = selectedImg;
     clearImgSelection();
 
@@ -289,19 +448,83 @@
         if (memImgs[imageIndex]) memImgs[imageIndex].remove();
         card.fields[fieldName] = tmp.innerHTML;
         showToast("Image removed");
+        // Re-apply filter if active
+        if (filterImages.value !== "all") {
+          var prevNoteId = card.note_id;
+          applyFilterSort();
+          restoreSelection(prevNoteId);
+        }
       });
   }
 
-  // ── Export handler ──
+  // ── Save handlers ──
 
-  btnExport.addEventListener("click", function () {
-    pywebview.api.export_apkg()
+  btnSave.addEventListener("click", function () {
+    pywebview.api.save_deck()
       .then(function (res) {
         if (!res.ok) {
-          if (res.error !== "cancelled") showToast("Export failed: " + res.error);
+          if (res.error !== "cancelled") showToast("Save failed: " + res.error);
           return;
         }
-        showToast("Deck exported successfully");
+        showToast("Deck saved");
+      });
+  });
+
+  btnSaveDropdown.addEventListener("click", function (e) {
+    e.stopPropagation();
+    saveDropdown.classList.toggle("hidden");
+  });
+
+  document.getElementById("save-overwrite").addEventListener("click", function () {
+    saveDropdown.classList.add("hidden");
+    pywebview.api.save_deck_as_overwrite()
+      .then(function (res) {
+        if (!res) return;
+        if (!res.ok) {
+          showToast("Save failed: " + res.error);
+          return;
+        }
+        showToast("Deck saved (overwritten)");
+      });
+  });
+
+  document.getElementById("save-copy").addEventListener("click", function () {
+    saveDropdown.classList.add("hidden");
+    pywebview.api.save_deck_as()
+      .then(function (res) {
+        if (!res.ok) {
+          if (res.error !== "cancelled") showToast("Save failed: " + res.error);
+          return;
+        }
+        showToast("Deck saved as copy");
+      });
+  });
+
+  // Close dropdown when clicking outside
+  document.addEventListener("click", function () {
+    saveDropdown.classList.add("hidden");
+  });
+
+  // ── Settings handlers ──
+
+  btnSettings.addEventListener("click", function () {
+    pywebview.api.get_settings()
+      .then(function (settings) {
+        var radios = document.querySelectorAll('input[name="save_mode"]');
+        radios.forEach(function (r) {
+          r.checked = r.value === (settings.save_mode || "copy");
+        });
+        settingsOverlay.classList.remove("hidden");
+      });
+  });
+
+  btnSettingsDone.addEventListener("click", function () {
+    var selected = document.querySelector('input[name="save_mode"]:checked');
+    var mode = selected ? selected.value : "copy";
+    pywebview.api.update_settings({ save_mode: mode })
+      .then(function () {
+        settingsOverlay.classList.add("hidden");
+        showToast("Settings saved");
       });
   });
 
@@ -321,6 +544,11 @@
         return;
       }
 
+      // Reset filter/sort to defaults
+      filterImages.value = "all";
+      sortOrder.value = "original";
+      displayCards = cards.slice();
+
       deckTitle.textContent = cards.length + " cards";
       buildSidebar();
 
@@ -337,8 +565,10 @@
   function resetToDropZone() {
     pywebview.api.close_session();
     cards = [];
+    displayCards = [];
     currentIndex = -1;
     selectedFieldName = null;
+    editingField = null;
     cardList.innerHTML = "";
     cardFields.innerHTML = "";
     viewer.classList.add("hidden");
@@ -393,12 +623,21 @@
 
   document.addEventListener("keydown", function (e) {
     if (viewer.classList.contains("hidden")) return;
+
+    // When editing a field, only handle Escape
+    if (editingField) {
+      if (e.key === "Escape") {
+        document.activeElement.blur();
+      }
+      return;
+    }
+
     if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault();
       if (currentIndex > 0) showCard(currentIndex - 1);
     } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       e.preventDefault();
-      if (currentIndex < cards.length - 1) showCard(currentIndex + 1);
+      if (currentIndex < displayCards.length - 1) showCard(currentIndex + 1);
     } else if ((e.key === "Backspace" || e.key === "Delete") && selectedImg) {
       e.preventDefault();
       handleRemoveImage();

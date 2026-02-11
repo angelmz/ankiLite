@@ -8,6 +8,7 @@ import os
 import webview
 
 from apkg_parser import DeckSession
+from settings import load_settings, save_settings
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 
@@ -108,6 +109,49 @@ class Api:
             return {"ok": False, "error": "cancelled"}
         save_path = result if isinstance(result, str) else result[0]
         return self.session.export_apkg(save_path)
+
+    def update_field(self, note_id, field_name, new_value):
+        """Update a card field's text/HTML content."""
+        if not self.session:
+            return {"ok": False, "error": "No deck loaded"}
+        try:
+            return self.session.update_field(note_id, field_name, new_value)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def save_deck(self):
+        """Save using the preferred mode from settings."""
+        if not self.session:
+            return {"ok": False, "error": "No deck loaded"}
+        settings = load_settings()
+        if settings.get("save_mode") == "overwrite":
+            return self.session.export_apkg(self.session.apkg_path)
+        # Default: save-as-copy via dialog
+        return self.export_apkg()
+
+    def save_deck_as(self):
+        """Always open a save dialog (save-as-copy)."""
+        return self.export_apkg()
+
+    def save_deck_as_overwrite(self):
+        """Overwrite the original file directly."""
+        if not self.session:
+            return {"ok": False, "error": "No deck loaded"}
+        return self.session.export_apkg(self.session.apkg_path)
+
+    def get_settings(self):
+        """Return current settings dict."""
+        return load_settings()
+
+    def update_settings(self, settings):
+        """Merge new values into settings and persist."""
+        try:
+            current = load_settings()
+            current.update(settings)
+            save_settings(current)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def close_session(self):
         """Close the current deck session."""
