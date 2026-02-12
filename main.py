@@ -96,6 +96,29 @@ class Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def copy_image(self, data_uri):
+        """Copy an image to the macOS system clipboard."""
+        try:
+            if not data_uri or not data_uri.startswith("data:"):
+                return {"ok": False, "error": "Invalid image data"}
+            base64_data = data_uri.split(",", 1)[1]
+            image_bytes = base64.b64decode(base64_data)
+
+            from AppKit import NSPasteboard, NSImage
+            from Foundation import NSData
+
+            ns_data = NSData.dataWithBytes_length_(image_bytes, len(image_bytes))
+            image = NSImage.alloc().initWithData_(ns_data)
+            if image is None:
+                return {"ok": False, "error": "Invalid image data"}
+
+            pb = NSPasteboard.generalPasteboard()
+            pb.clearContents()
+            pb.writeObjects_([image])
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def upload_image(self, note_id, field_name):
         """Open a file dialog to pick an image, then add it to a note field."""
         if not self.session:

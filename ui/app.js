@@ -781,6 +781,15 @@
     } else if ((e.key === "Backspace" || e.key === "Delete") && selectedImg) {
       e.preventDefault();
       handleRemoveImage();
+    } else if ((e.metaKey || e.ctrlKey) && e.key === "c" && selectedImg) {
+      e.preventDefault();
+      var src = selectedImg.src;
+      if (src && src.startsWith("data:")) {
+        pywebview.api.copy_image(src).then(function (res) {
+          if (res.ok) showToast("Image copied");
+          else showToast("Copy failed: " + res.error);
+        });
+      }
     }
   });
 
