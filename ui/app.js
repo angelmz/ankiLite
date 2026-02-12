@@ -332,8 +332,7 @@
 
   document.addEventListener("paste", function (e) {
     if (viewer.classList.contains("hidden")) return;
-    if (currentIndex < 0 || !selectedFieldName) return;
-    if (editingField) return; // let normal text paste work
+    if (currentIndex < 0) return;
 
     var items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
@@ -345,7 +344,13 @@
         break;
       }
     }
+
+    // No image in clipboard — let normal text paste work if editing
     if (!imageItem) return;
+
+    // Determine target field: the focused editing field, or the selected field
+    var targetField = editingField || selectedFieldName;
+    if (!targetField) return;
 
     e.preventDefault();
     var blob = imageItem.getAsFile();
@@ -355,7 +360,7 @@
       // result is "data:<mime>;base64,<data>"
       var base64Data = reader.result.split(",")[1];
       var card = displayCards[currentIndex];
-      pywebview.api.paste_image(card.note_id, selectedFieldName, base64Data, mimeType)
+      pywebview.api.paste_image(card.note_id, targetField, base64Data, mimeType)
         .then(function (res) {
           if (!res.ok) {
             showToast("Paste failed: " + res.error);
@@ -363,8 +368,8 @@
           }
           // Append image to display and in-memory card data
           var imgHtml = '<img src="' + res.data_uri + '">';
-          card.fields[selectedFieldName] += imgHtml;
-          var fieldEl = document.querySelector('.field-value[data-field-name="' + selectedFieldName + '"]');
+          card.fields[targetField] += imgHtml;
+          var fieldEl = document.querySelector('.field-value[data-field-name="' + targetField + '"]');
           if (fieldEl) {
             // Remove (empty) placeholder if present
             var emptySpan = fieldEl.querySelector('span[style]');

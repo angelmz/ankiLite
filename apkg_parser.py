@@ -69,6 +69,7 @@ def _open_db(tmp_dir):
             f.write(data)
         conn = sqlite3.connect(decompressed_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=DELETE")
         return conn, "collection.anki21"
 
     for name in ("collection.anki21", "collection.anki2"):
@@ -76,6 +77,7 @@ def _open_db(tmp_dir):
         if os.path.exists(db_path):
             conn = sqlite3.connect(db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=DELETE")
             return conn, name
 
     raise FileNotFoundError("No Anki database found in .apkg")
@@ -462,6 +464,11 @@ class DeckSession:
         """Export the modified deck as a new .apkg file."""
         try:
             self.conn.commit()
+            # Checkpoint any WAL data into the main DB file
+            try:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
 
             # Write updated media map
             media_json = json.dumps(self.media_map).encode("utf-8")

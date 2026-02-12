@@ -12,17 +12,20 @@ import pytest
 from apkg_parser import DeckSession
 
 
-def _make_apkg(path, cards=None):
+def _make_apkg(path, cards=None, wal_mode=False):
     """Build a minimal .apkg fixture at *path*.
 
     *cards* is a list of (note_id, model_id, flds_string) tuples.
     Defaults to one note with two fields: "Capital of France?" / "Paris".
+    If *wal_mode* is True the DB inside the ZIP uses WAL journal mode.
     """
     if cards is None:
         cards = [(1, 1, "Capital of France?\x1fParis")]
 
     db_path = path + ".db"
     conn = sqlite3.connect(db_path)
+    if wal_mode:
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         "CREATE TABLE col (id INTEGER PRIMARY KEY, models TEXT)"
     )
@@ -55,9 +58,19 @@ def _make_apkg(path, cards=None):
 
     with zipfile.ZipFile(path, "w") as zf:
         zf.write(db_path, "collection.anki2")
+        # Include WAL sidecar if it exists (WAL mode)
+        wal_path = db_path + "-wal"
+        if os.path.exists(wal_path):
+            zf.write(wal_path, "collection.anki2-wal")
         zf.writestr("media", "{}")
 
     os.remove(db_path)
+    wal_path = db_path + "-wal"
+    if os.path.exists(wal_path):
+        os.remove(wal_path)
+    shm_path = db_path + "-shm"
+    if os.path.exists(shm_path):
+        os.remove(shm_path)
 
 
 @pytest.fixture()
@@ -65,6 +78,14 @@ def apkg_file(tmp_path):
     """Create a disposable .apkg fixture and return its path."""
     p = str(tmp_path / "test.apkg")
     _make_apkg(p)
+    return p
+
+
+@pytest.fixture()
+def apkg_file_wal(tmp_path):
+    """Create a disposable .apkg fixture with WAL journal mode."""
+    p = str(tmp_path / "test_wal.apkg")
+    _make_apkg(p, wal_mode=True)
     return p
 
 
@@ -278,3 +299,118 @@ class TestDeckSession:
         assert os.path.isdir(tmp_dir)
         session.close()
         assert not os.path.exists(tmp_dir)
+
+    def test_export_roundtrip_wal_mode(self, apkg_file_wal, tmp_path):
+        """Images survive export from a WAL-mode DB."""
+        session = DeckSession(apkg_file_wal)
+        session.open()
+        session.add_image(1, "Back", b"\x89PNG fake", ".png")
+        out = str(tmp_path / "exported_wal.apkg")
+        result = session.export_apkg(out)
+        assert result["ok"] is True
+        session.close()
+
+        session2 = DeckSession(out)
+        cards = session2.open()
+        assert "<img src=" in cards[0]["fields"]["Back"]
+        session2.close()
+
+    def test_add_image_then_update_field_roundtrip(self, apkg_file, tmp_path):
+        """Simulates paste then blur: add_image + update_field + export preserves images."""
+        session = DeckSession(apkg_file)
+        session.open()
+        res = session.add_image(1, "Back", b"\x89PNG fake", ".png")
+        assert res["ok"] is True
+        data_uri = res["data_uri"]
+
+        # Simulate blur: JS sends HTML with data URI back
+        new_value = 'Paris<img src="' + data_uri + '">'
+        session.update_field(1, "Back", new_value)
+
+        # Verify DB stores filename, not data URI
+        row = session.conn.execute(
+            "SELECT flds FROM notes WHERE id = 1"
+        ).fetchone()
+        db_back = row[0].split("\x1f")[1]
+        assert "paste_" in db_back
+        assert "data:" not in db_back
+
+        out = str(tmp_path / "blur_export.apkg")
+        session.export_apkg(out)
+        session.close()
+
+        # Image survives export + reopen
+        session2 = DeckSession(out)
+        cards = session2.open()
+        back = cards[0]["fields"]["Back"]
+        assert "<img src=" in back
+        assert "Paris" in back
+        session2.close()
+
+    def test_deinline_field_replaces_known_uris(self, apkg_file):
+        """_deinline_field() converts data URIs to filenames."""
+        session = DeckSession(apkg_file)
+        session.open()
+        res = session.add_image(1, "Back", b"\x89PNG fake", ".png")
+        data_uri = res["data_uri"]
+
+        html = f'text<img src="{data_uri}">more'
+        result = session._deinline_field(html)
+        assert "paste_" in result
+        assert "data:" not in result
+        session.close()
+
+    def test_update_field_deinlines_after_paste(self, apkg_file):
+        """DB stores filenames not data URIs after paste+blur."""
+        session = DeckSession(apkg_file)
+        session.open()
+        res = session.add_image(1, "Back", b"\x89PNG fake", ".png")
+        data_uri = res["data_uri"]
+
+        session.update_field(1, "Back", f'Paris<img src="{data_uri}">')
+        row = session.conn.execute(
+            "SELECT flds FROM notes WHERE id = 1"
+        ).fetchone()
+        back = row[0].split("\x1f")[1]
+        assert "paste_" in back
+        assert "data:" not in back
+        session.close()
+
+    def test_multiple_images_persist_roundtrip(self, apkg_file, tmp_path):
+        """Multiple pasted images all survive export + reopen."""
+        session = DeckSession(apkg_file)
+        session.open()
+        session.add_image(1, "Back", b"\x89PNG img1", ".png")
+        session.add_image(1, "Back", b"\x89PNG img2", ".png")
+
+        out = str(tmp_path / "multi_img.apkg")
+        session.export_apkg(out)
+        session.close()
+
+        session2 = DeckSession(out)
+        cards = session2.open()
+        back = cards[0]["fields"]["Back"]
+        assert back.count("<img") == 2
+        session2.close()
+
+    def test_export_overwrite_preserves_images(self, apkg_file):
+        """Overwrite save mode preserves images."""
+        session = DeckSession(apkg_file)
+        session.open()
+        session.add_image(1, "Back", b"\x89PNG fake", ".png")
+        result = session.export_apkg(session.apkg_path)
+        assert result["ok"] is True
+        session.close()
+
+        session2 = DeckSession(apkg_file)
+        cards = session2.open()
+        assert "<img src=" in cards[0]["fields"]["Back"]
+        session2.close()
+
+    def test_wal_mode_changed_to_delete_after_open(self, apkg_file_wal):
+        """Journal mode is DELETE after opening a WAL-mode DB."""
+        session = DeckSession(apkg_file_wal)
+        session.open()
+        row = session.conn.execute("PRAGMA journal_mode").fetchone()
+        assert row[0] == "delete"
+        session.close()
