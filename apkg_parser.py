@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+import uuid
 import zipfile
 
 try:
@@ -230,6 +231,7 @@ class DeckSession:
 
             cards.append({
                 "note_id": note_id,
+                "model_id": mid,
                 "model": model["name"],
                 "fields": fields,
                 "created_ts": note_id // 1000,
@@ -388,6 +390,71 @@ class DeckSession:
             "UPDATE notes SET flds = ?, mod = ?, usn = -1 WHERE id = ?",
             (new_flds, int(time.time()), note_id),
         )
+        self.conn.commit()
+        return {"ok": True}
+
+    def create_card(self, model_id):
+        """Create a new card with empty fields for the given model."""
+        model = self.models.get(model_id)
+        if model is None:
+            return {"ok": False, "error": "Model not found"}
+
+        # Generate unique IDs
+        note_id = int(time.time() * 1000)
+        card_id = note_id + 1
+        guid = str(uuid.uuid4())[:10]
+        now = int(time.time())
+
+        # Get deck_id from an existing card
+        row = self.conn.execute("SELECT did FROM cards LIMIT 1").fetchone()
+        if row is None:
+            return {"ok": False, "error": "No cards in deck to determine deck_id"}
+        deck_id = row[0]
+
+        # Create empty fields joined by \x1f
+        field_count = len(model["fields"])
+        empty_fields = "\x1f".join([""] * field_count)
+
+        # Insert into notes table
+        self.conn.execute(
+            """INSERT INTO notes (id, guid, mid, mod, usn, tags, flds, sfld, csum, flags, data)
+               VALUES (?, ?, ?, ?, -1, '', ?, '', 0, 0, '')""",
+            (note_id, guid, model_id, now, empty_fields),
+        )
+
+        # Insert into cards table
+        self.conn.execute(
+            """INSERT INTO cards (id, nid, did, ord, mod, usn, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data)
+               VALUES (?, ?, ?, 0, ?, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '')""",
+            (card_id, note_id, deck_id, now),
+        )
+        self.conn.commit()
+
+        # Build card dict matching open() format
+        fields = {name: "" for name in model["fields"]}
+        card = {
+            "note_id": note_id,
+            "model_id": model_id,
+            "model": model["name"],
+            "fields": fields,
+            "created_ts": note_id // 1000,
+            "mod_ts": now,
+        }
+        return {"ok": True, "card": card}
+
+    def delete_card(self, note_id):
+        """Delete a card and its associated note."""
+        # Verify note exists
+        row = self.conn.execute(
+            "SELECT id FROM notes WHERE id = ?", (note_id,)
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": "Note not found"}
+
+        # Delete from cards table first (references note)
+        self.conn.execute("DELETE FROM cards WHERE nid = ?", (note_id,))
+        # Delete from notes table
+        self.conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
         self.conn.commit()
         return {"ok": True}
 

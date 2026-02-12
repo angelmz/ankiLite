@@ -14,6 +14,14 @@
       <h1>ankiLite</h1>
       <p>Drop an <strong>.apkg</strong> file here to view cards</p>
       <button id="btn-open">Open File...</button>
+      <div id="recent-group">
+        <button id="btn-recent" disabled>Open Recent</button>
+        <div id="recent-dropdown" class="hidden">
+          <div id="recent-list"></div>
+          <div class="recent-divider"></div>
+          <button id="btn-clear-recent">Clear Recent</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -23,6 +31,7 @@
       <div id="sidebar-header">
         <h2 id="deck-title">Cards</h2>
         <div id="sidebar-actions">
+          <button id="btn-add-card" title="Add new card">+</button>
           <div id="save-group">
             <button id="btn-save" title="Save deck">Save</button>
             <button id="btn-save-dropdown" title="Save options">&#9662;</button>
@@ -55,6 +64,9 @@
       <div id="card-display">
         <div id="card-fields"></div>
       </div>
+      <div id="card-actions">
+        <button id="btn-delete-card" title="Delete this card">Delete Card</button>
+      </div>
       <div id="nav-hint">&larr; &rarr; navigate cards &middot; click an image and press &loz; backspace to remove it</div>
     </div>
   </div>
@@ -71,6 +83,18 @@
         </div>
       </div>
       <button id="btn-settings-done">Done</button>
+    </div>
+  </div>
+
+  <!-- Delete confirmation dialog -->
+  <div id="delete-confirm-overlay" class="hidden">
+    <div id="delete-confirm-panel">
+      <h3>Delete Card?</h3>
+      <p>This action cannot be undone.</p>
+      <div class="confirm-buttons">
+        <button id="btn-delete-cancel">Cancel</button>
+        <button id="btn-delete-confirm">Delete</button>
+      </div>
     </div>
   </div>
 

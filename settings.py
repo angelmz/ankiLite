@@ -2,8 +2,12 @@
 
 import json
 import os
+import time
 
-DEFAULTS = {"save_mode": "copy"}
+DEFAULTS = {
+    "save_mode": "copy",
+    "recent_files": [],  # List of {"path": str, "name": str, "timestamp": int}
+}
 
 _DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".ankiLite")
 
@@ -30,3 +34,23 @@ def save_settings(settings, config_dir=None):
     path = os.path.join(config_dir, "settings.json")
     with open(path, "w") as f:
         json.dump(settings, f, indent=2)
+
+
+def add_recent_file(path, config_dir=None):
+    """Add a file to recent files list, keeping max 10 items."""
+    settings = load_settings(config_dir)
+    recent = settings.get("recent_files", [])
+
+    # Remove if already exists (will re-add at top)
+    recent = [r for r in recent if r["path"] != path]
+
+    # Add to front
+    recent.insert(0, {
+        "path": path,
+        "name": os.path.basename(path),
+        "timestamp": int(time.time())
+    })
+
+    # Keep max 10
+    settings["recent_files"] = recent[:10]
+    save_settings(settings, config_dir)

@@ -8,7 +8,7 @@ import os
 import webview
 
 from apkg_parser import DeckSession
-from settings import load_settings, save_settings
+from settings import load_settings, save_settings, add_recent_file
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 
@@ -38,6 +38,7 @@ class Api:
             self._close_session()
             self.session = DeckSession(path)
             cards = self.session.open()
+            add_recent_file(path)  # Track this file
             return {"ok": True, "cards": cards}
         except Exception as e:
             self._close_session()
@@ -153,6 +154,43 @@ class Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def get_recent_files(self):
+        """Return list of recent files, filtering out any that no longer exist."""
+        settings = load_settings()
+        recent = settings.get("recent_files", [])
+        # Filter to only existing files
+        valid = [r for r in recent if os.path.exists(r["path"])]
+        # Update settings if any were removed
+        if len(valid) != len(recent):
+            settings["recent_files"] = valid
+            save_settings(settings)
+        return valid
+
+    def clear_recent_files(self):
+        """Clear the recent files list."""
+        settings = load_settings()
+        settings["recent_files"] = []
+        save_settings(settings)
+        return {"ok": True}
+
+    def create_card(self, model_id):
+        """Create a new card with empty fields for the given model."""
+        if not self.session:
+            return {"ok": False, "error": "No deck loaded"}
+        try:
+            return self.session.create_card(model_id)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def delete_card(self, note_id):
+        """Delete a card and its associated note."""
+        if not self.session:
+            return {"ok": False, "error": "No deck loaded"}
+        try:
+            return self.session.delete_card(note_id)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def close_session(self):
         """Close the current deck session."""
         self._close_session()
@@ -185,6 +223,12 @@ def _on_loaded():
     window.dom.body.on("drop", _on_drop)
 
 
+def _on_closing():
+    """Minimize window instead of quitting. Click dock icon to restore."""
+    window.minimize()
+    return False  # Prevent actual close
+
+
 def main():
     global window
     window = webview.create_window(
@@ -196,6 +240,7 @@ def main():
         min_size=(600, 400),
     )
     window.events.loaded += _on_loaded
+    window.events.closing += _on_closing
     webview.start(debug=False)
 
 

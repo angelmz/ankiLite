@@ -7,6 +7,10 @@
   const viewer = document.getElementById("viewer");
   const loading = document.getElementById("loading");
   const btnOpen = document.getElementById("btn-open");
+  const btnRecent = document.getElementById("btn-recent");
+  const recentDropdown = document.getElementById("recent-dropdown");
+  const recentList = document.getElementById("recent-list");
+  const btnClearRecent = document.getElementById("btn-clear-recent");
   const btnBack = document.getElementById("btn-back");
   const btnSave = document.getElementById("btn-save");
   const btnSaveDropdown = document.getElementById("btn-save-dropdown");
@@ -19,6 +23,11 @@
   const cardFields = document.getElementById("card-fields");
   const filterImages = document.getElementById("filter-images");
   const sortOrder = document.getElementById("sort-order");
+  const btnAddCard = document.getElementById("btn-add-card");
+  const btnDeleteCard = document.getElementById("btn-delete-card");
+  const deleteConfirmOverlay = document.getElementById("delete-confirm-overlay");
+  const btnDeleteCancel = document.getElementById("btn-delete-cancel");
+  const btnDeleteConfirm = document.getElementById("btn-delete-confirm");
 
   let cards = [];
   let displayCards = [];
@@ -503,6 +512,52 @@
   // Close dropdown when clicking outside
   document.addEventListener("click", function () {
     saveDropdown.classList.add("hidden");
+    recentDropdown.classList.add("hidden");
+  });
+
+  // ── Recent files handlers ──
+
+  async function loadRecentFiles() {
+    try {
+      const recent = await pywebview.api.get_recent_files();
+      if (recent.length === 0) {
+        btnRecent.disabled = true;
+        recentList.innerHTML = "";
+        return;
+      }
+
+      btnRecent.disabled = false;
+      recentList.innerHTML = recent.map(function (r) {
+        return '<button class="recent-item" data-path="' + escapeHtml(r.path) + '" title="' + escapeHtml(r.path) + '">' +
+          escapeHtml(r.name) +
+          '</button>';
+      }).join("");
+
+      // Bind click handlers to recent items
+      recentList.querySelectorAll(".recent-item").forEach(function (item) {
+        item.addEventListener("click", function (e) {
+          e.stopPropagation();
+          recentDropdown.classList.add("hidden");
+          loadDeck(item.dataset.path);
+        });
+      });
+    } catch (e) {
+      btnRecent.disabled = true;
+    }
+  }
+
+  btnRecent.addEventListener("click", function (e) {
+    e.stopPropagation();
+    recentDropdown.classList.toggle("hidden");
+  });
+
+  btnClearRecent.addEventListener("click", function (e) {
+    e.stopPropagation();
+    pywebview.api.clear_recent_files().then(function () {
+      recentDropdown.classList.add("hidden");
+      loadRecentFiles();
+      showToast("Recent files cleared");
+    });
   });
 
   // ── Settings handlers ──
@@ -525,6 +580,73 @@
       .then(function () {
         settingsOverlay.classList.add("hidden");
         showToast("Settings saved");
+      });
+  });
+
+  // ── Create card handler ──
+
+  btnAddCard.addEventListener("click", function () {
+    if (displayCards.length === 0) {
+      showToast("No cards to inherit model from");
+      return;
+    }
+    var modelId = displayCards[currentIndex >= 0 ? currentIndex : 0].model_id;
+    pywebview.api.create_card(modelId)
+      .then(function (res) {
+        if (!res.ok) {
+          showToast("Create failed: " + res.error);
+          return;
+        }
+        // Add new card to cards array
+        cards.push(res.card);
+        // Re-apply filter/sort and select the new card
+        applyFilterSort();
+        restoreSelection(res.card.note_id);
+        showToast("Card created");
+      });
+  });
+
+  // ── Delete card handlers ──
+
+  btnDeleteCard.addEventListener("click", function () {
+    if (currentIndex < 0 || displayCards.length === 0) return;
+    deleteConfirmOverlay.classList.remove("hidden");
+  });
+
+  btnDeleteCancel.addEventListener("click", function () {
+    deleteConfirmOverlay.classList.add("hidden");
+  });
+
+  btnDeleteConfirm.addEventListener("click", function () {
+    deleteConfirmOverlay.classList.add("hidden");
+    if (currentIndex < 0 || displayCards.length === 0) return;
+
+    var card = displayCards[currentIndex];
+    var noteId = card.note_id;
+
+    pywebview.api.delete_card(noteId)
+      .then(function (res) {
+        if (!res.ok) {
+          showToast("Delete failed: " + res.error);
+          return;
+        }
+        // Remove from cards array
+        var cardIdx = cards.findIndex(function (c) { return c.note_id === noteId; });
+        if (cardIdx >= 0) cards.splice(cardIdx, 1);
+
+        // Determine next card to select
+        var nextNoteId = null;
+        if (displayCards.length > 1) {
+          if (currentIndex < displayCards.length - 1) {
+            nextNoteId = displayCards[currentIndex + 1].note_id;
+          } else if (currentIndex > 0) {
+            nextNoteId = displayCards[currentIndex - 1].note_id;
+          }
+        }
+
+        applyFilterSort();
+        restoreSelection(nextNoteId);
+        showToast("Card deleted");
       });
   });
 
@@ -573,6 +695,7 @@
     cardFields.innerHTML = "";
     viewer.classList.add("hidden");
     dropZone.classList.remove("hidden");
+    loadRecentFiles();  // Refresh recent files list
   }
 
   // ── Drag and drop ──
@@ -622,6 +745,14 @@
   // ── Keyboard navigation ──
 
   document.addEventListener("keydown", function (e) {
+    // Handle Escape for delete confirmation dialog
+    if (!deleteConfirmOverlay.classList.contains("hidden")) {
+      if (e.key === "Escape") {
+        deleteConfirmOverlay.classList.add("hidden");
+      }
+      return;
+    }
+
     if (viewer.classList.contains("hidden")) return;
 
     // When editing a field, only handle Escape
@@ -642,5 +773,12 @@
       e.preventDefault();
       handleRemoveImage();
     }
+  });
+
+  // ── Initialization ──
+
+  // Load recent files on startup (wait for pywebview to be ready)
+  window.addEventListener("pywebviewready", function () {
+    loadRecentFiles();
   });
 })();
