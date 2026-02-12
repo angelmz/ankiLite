@@ -5,7 +5,9 @@ import base64
 import json
 import os
 import signal
+import subprocess
 import sys
+import tempfile
 
 import webview
 
@@ -21,6 +23,27 @@ MIME_TO_EXT = {
     "image/webp": ".webp",
     "image/bmp": ".bmp",
 }
+
+
+def _convert_tiff_to_png(tiff_bytes):
+    """Convert TIFF bytes to PNG using macOS sips command."""
+    with tempfile.NamedTemporaryFile(suffix=".tiff", delete=False) as tiff_file:
+        tiff_file.write(tiff_bytes)
+        tiff_path = tiff_file.name
+
+    png_path = tiff_path.replace(".tiff", ".png")
+    try:
+        subprocess.run(
+            ["sips", "-s", "format", "png", tiff_path, "--out", png_path],
+            check=True,
+            capture_output=True,
+        )
+        with open(png_path, "rb") as f:
+            return f.read()
+    finally:
+        os.unlink(tiff_path)
+        if os.path.exists(png_path):
+            os.unlink(png_path)
 
 
 class Api:
@@ -62,6 +85,12 @@ class Api:
             return {"ok": False, "error": "No deck loaded"}
         try:
             image_bytes = base64.b64decode(base64_data)
+
+            # Convert TIFF to PNG for Anki compatibility (macOS screenshots)
+            if mime_type == "image/tiff":
+                image_bytes = _convert_tiff_to_png(image_bytes)
+                mime_type = "image/png"
+
             ext = MIME_TO_EXT.get(mime_type, ".png")
             return self.session.add_image(note_id, field_name, image_bytes, ext)
         except Exception as e:
@@ -128,9 +157,22 @@ class Api:
             return {"ok": False, "error": "No deck loaded"}
         settings = load_settings()
         if settings.get("save_mode") == "overwrite":
-            return self.session.export_apkg(self.session.apkg_path)
-        # Default: save-as-copy via dialog
-        return self.export_apkg()
+            result = self.session.export_apkg(self.session.apkg_path)
+        else:
+            # Default: save-as-copy via dialog
+            result = self.export_apkg()
+
+        # Quit after save if setting enabled
+        if result.get("ok") and settings.get("quit_on_save"):
+            self.quit_app()
+
+        return result
+
+    def quit_app(self):
+        """Close session and destroy window."""
+        self._close_session()
+        window.destroy()
+        return {"ok": True}
 
     def save_deck_as(self):
         """Always open a save dialog (save-as-copy)."""
@@ -226,9 +268,9 @@ def _on_loaded():
 
 
 def _on_closing():
-    """Minimize window instead of quitting. Click dock icon to restore."""
-    window.minimize()
-    return False  # Prevent actual close
+    """Clean up and allow window to close."""
+    api._close_session()
+    return True  # Allow close
 
 
 def main():

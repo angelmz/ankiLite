@@ -704,6 +704,17 @@ html, body {
   margin-right: 8px;
 }
 
+.settings-label input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 4px 0 0 0;
+  line-height: 1.4;
+}
+
 #btn-settings-done {
   display: block;
   width: 100%;

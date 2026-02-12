@@ -6,6 +6,7 @@ import time
 
 DEFAULTS = {
     "save_mode": "copy",
+    "quit_on_save": False,
     "recent_files": [],  # List of {"path": str, "name": str, "timestamp": int}
 }
 

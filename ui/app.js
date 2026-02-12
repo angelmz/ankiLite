@@ -562,6 +562,8 @@
 
   // ── Settings handlers ──
 
+  const quitOnSaveCheckbox = document.getElementById("quit-on-save");
+
   btnSettings.addEventListener("click", function () {
     pywebview.api.get_settings()
       .then(function (settings) {
@@ -569,6 +571,7 @@
         radios.forEach(function (r) {
           r.checked = r.value === (settings.save_mode || "copy");
         });
+        quitOnSaveCheckbox.checked = settings.quit_on_save || false;
         settingsOverlay.classList.remove("hidden");
       });
   });
@@ -576,7 +579,8 @@
   btnSettingsDone.addEventListener("click", function () {
     var selected = document.querySelector('input[name="save_mode"]:checked');
     var mode = selected ? selected.value : "copy";
-    pywebview.api.update_settings({ save_mode: mode })
+    var quitOnSave = quitOnSaveCheckbox.checked;
+    pywebview.api.update_settings({ save_mode: mode, quit_on_save: quitOnSave })
       .then(function () {
         settingsOverlay.classList.add("hidden");
         showToast("Settings saved");
