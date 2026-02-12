@@ -5,11 +5,14 @@ A lightweight desktop viewer and editor for Anki `.apkg` flashcard decks. Open a
 ## Features
 
 - **Open any `.apkg` file** — drag-and-drop or file dialog, supports all Anki deck formats (`.anki2`, `.anki21`, `.anki21b` with zstd compression)
+- **Recent files** — quickly reopen previously loaded decks from the drop zone
 - **Browse cards** — sidebar lists all cards with previews; arrow keys for quick navigation
+- **Create & delete cards** — add new cards or remove existing ones without leaving the app
 - **Inline editing** — click any field to edit text and HTML directly; changes save automatically
-- **Image management** — paste images from clipboard, add from file, or select and delete with backspace
+- **Image management** — paste from clipboard, add from file (`+img` button), copy to clipboard, or select and delete with backspace
 - **Filter & sort** — filter cards by image content, sort by creation or modification date
-- **Export** — save as a new `.apkg` or overwrite the original, fully compatible with Anki
+- **Save options** — save as a new `.apkg` or overwrite the original, with configurable default behavior
+- **Settings** — configure default save mode (copy vs overwrite) and quit-on-save; persisted in `~/.ankiLite/settings.json`
 - **Zero config** — single `python main.py` to launch; no database setup, no accounts
 
 ## Install
@@ -32,7 +35,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Drop an `.apkg` file onto the window, or click **Open File** to browse.
+Drop an `.apkg` file onto the window, click **Open File** to browse, or pick a deck from **Recent**.
 
 ### Keyboard shortcuts
 
@@ -40,9 +43,10 @@ Drop an `.apkg` file onto the window, or click **Open File** to browse.
 |-----|--------|
 | `←` `↑` | Previous card |
 | `→` `↓` | Next card |
+| `Cmd+V` | Paste image from clipboard |
+| `Cmd+C` | Copy selected image to clipboard |
 | `Backspace` / `Delete` | Remove selected image |
-| `Escape` | Stop editing a field |
-| `Cmd+V` | Paste image from clipboard (when not editing text) |
+| `Escape` | Stop editing a field / dismiss dialogs |
 
 ### Filtering and sorting
 
@@ -57,25 +61,26 @@ The header updates to show how many cards match (e.g. "12 of 50 cards").
 
 ```
 main.py                 App entry point, pywebview window + JS API bridge
-apkg_parser.py          .apkg extraction, SQLite parsing, media inlining, export
-settings.py             User preferences (~/.ankiLite/settings.json)
+apkg_parser.py          .apkg extraction, SQLite parsing, media inlining, card CRUD, export
+settings.py             User preferences (~/.ankiLite/settings.json), recent files tracking
 ui/
   index.html            Single-page app shell
   style.css             All styles
-  app.js                Frontend logic (rendering, filtering, editing)
+  app.js                Frontend logic (rendering, filtering, editing, card management)
   marked.min.js         Markdown renderer (vendored)
 tests/
-  test_deck_session.py  Backend tests for parsing, editing, export
+  test_deck_session.py  Backend tests for parsing, editing, card CRUD, export
   test_settings.py      Settings persistence tests
 ```
 
 ### Data flow
 
-1. User drops/selects `.apkg` file
+1. User drops/selects `.apkg` file (or picks from recent files)
 2. Python extracts ZIP, opens SQLite, inlines media as base64 data URIs
 3. Card dicts are returned to JS with fields, timestamps, and model info
 4. Frontend renders cards with filter/sort controls; edits call back to Python
-5. On save, Python de-inlines base64 back to media files and rebuilds the `.apkg` ZIP
+5. Creating/deleting cards updates SQLite in real time
+6. On save, Python de-inlines base64 back to media files and rebuilds the `.apkg` ZIP
 
 ## Tests
 
