@@ -4,6 +4,8 @@ import atexit
 import base64
 import json
 import os
+import signal
+import sys
 
 import webview
 
@@ -241,6 +243,13 @@ def main():
     )
     window.events.loaded += _on_loaded
     window.events.closing += _on_closing
+
+    def _sigint_handler(sig, frame):
+        api._close_session()
+        window.destroy()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _sigint_handler)
     webview.start(debug=False)
 
 
