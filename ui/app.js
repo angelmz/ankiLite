@@ -252,11 +252,18 @@
       });
     });
 
-    // Bind image click for selection
-    document.querySelectorAll(".field-value img").forEach(function (img) {
-      img.addEventListener("click", function (e) {
-        e.stopPropagation();
-        selectImg(img);
+    // Bind image mousedown for selection (mousedown + preventDefault avoids contenteditable interference)
+    document.querySelectorAll(".field-value").forEach(function (el) {
+      el.addEventListener("mousedown", function (ev) {
+        var img = ev.target.closest("img");
+        if (img) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (document.activeElement && document.activeElement.classList.contains("field-value")) {
+            document.activeElement.blur();
+          }
+          selectImg(img);
+        }
       });
     });
 
@@ -378,10 +385,6 @@
             }
             var img = document.createElement("img");
             img.src = res.data_uri;
-            img.addEventListener("click", function (ev) {
-              ev.stopPropagation();
-              selectImg(img);
-            });
             fieldEl.appendChild(img);
           }
           showToast("Image pasted");
@@ -417,10 +420,6 @@
           }
           var img = document.createElement("img");
           img.src = res.data_uri;
-          img.addEventListener("click", function (ev) {
-            ev.stopPropagation();
-            selectImg(img);
-          });
           fieldEl.appendChild(img);
         }
         showToast("Image added");

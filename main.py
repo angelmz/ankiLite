@@ -104,7 +104,7 @@ class Api:
             base64_data = data_uri.split(",", 1)[1]
             image_bytes = base64.b64decode(base64_data)
 
-            from AppKit import NSPasteboard, NSImage
+            from AppKit import NSPasteboard, NSImage, NSBitmapImageRep
             from Foundation import NSData
 
             ns_data = NSData.dataWithBytes_length_(image_bytes, len(image_bytes))
@@ -112,9 +112,14 @@ class Api:
             if image is None:
                 return {"ok": False, "error": "Invalid image data"}
 
+            # Write as PNG (not TIFF) to avoid clipboard bloat
+            tiff_data = image.TIFFRepresentation()
+            bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
+            png_data = bitmap.representationUsingType_properties_(4, None)
+
             pb = NSPasteboard.generalPasteboard()
             pb.clearContents()
-            pb.writeObjects_([image])
+            pb.setData_forType_(png_data, "public.png")
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
