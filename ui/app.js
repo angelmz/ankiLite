@@ -21,6 +21,7 @@
   const deckTitle = document.getElementById("deck-title");
   const cardList = document.getElementById("card-list");
   const cardFields = document.getElementById("card-fields");
+  const searchInput = document.getElementById("search-input");
   const filterImages = document.getElementById("filter-images");
   const sortOrder = document.getElementById("sort-order");
   const btnAddCard = document.getElementById("btn-add-card");
@@ -60,6 +61,18 @@
       filtered = cards.slice();
     }
 
+    // Text search
+    var query = searchInput.value.trim().toLowerCase();
+    if (query) {
+      filtered = filtered.filter(function (card) {
+        var fields = card.fields;
+        for (var key in fields) {
+          if (fields[key] && stripHtml(fields[key]).toLowerCase().indexOf(query) !== -1) return true;
+        }
+        return false;
+      });
+    }
+
     // Sort
     if (sort === "created-desc") {
       filtered.sort(function (a, b) { return b.created_ts - a.created_ts; });
@@ -75,7 +88,7 @@
     displayCards = filtered;
 
     // Update title
-    if (filter !== "all") {
+    if (filter !== "all" || query) {
       deckTitle.textContent = displayCards.length + " of " + cards.length + " cards";
     } else {
       deckTitle.textContent = cards.length + " cards";
@@ -139,6 +152,45 @@
     return tmp.textContent || tmp.innerText || "";
   }
 
+  // ── Multi-image layout helpers ──
+
+  function stripImgRows(fieldEl) {
+    var rows = fieldEl.querySelectorAll(".img-row");
+    rows.forEach(function (row) {
+      while (row.firstChild) {
+        row.parentNode.insertBefore(row.firstChild, row);
+      }
+      row.remove();
+    });
+  }
+
+  function layoutImages(fieldEl) {
+    stripImgRows(fieldEl);
+    var children = fieldEl.childNodes;
+    var imgs = [];
+    var hasSignificantText = false;
+    for (var i = 0; i < children.length; i++) {
+      var node = children[i];
+      if (node.nodeType === 1 && node.tagName === "IMG") {
+        imgs.push(node);
+      } else if (node.nodeType === 1) {
+        // Element node that isn't an img — check for text content
+        var text = node.textContent.trim();
+        if (text.length > 0) hasSignificantText = true;
+      } else if (node.nodeType === 3) {
+        // Text node
+        var text = node.textContent.trim();
+        if (text.length > 0) hasSignificantText = true;
+      }
+    }
+    if (imgs.length >= 2 && imgs.length <= 4 && !hasSignificantText) {
+      var row = document.createElement("div");
+      row.className = "img-row";
+      fieldEl.insertBefore(row, imgs[0]);
+      imgs.forEach(function (img) { row.appendChild(img); });
+    }
+  }
+
   // ── Image & field selection ──
 
   function clearImgSelection() {
@@ -170,8 +222,10 @@
     editingField = null;
     var card = displayCards[currentIndex];
     if (!card) return;
+    stripImgRows(el);
     var newHtml = el.innerHTML;
     var oldHtml = card.fields[fieldName];
+    layoutImages(el);
     if (newHtml === oldHtml) return;
 
     card.fields[fieldName] = newHtml;
@@ -229,6 +283,11 @@
         '</div>';
     }
     cardFields.innerHTML = html;
+
+    // Apply multi-image layout to each field
+    document.querySelectorAll(".field-value").forEach(function (el) {
+      layoutImages(el);
+    });
 
     // Bind field focus/blur for inline editing
     document.querySelectorAll(".field-value").forEach(function (el) {
@@ -335,6 +394,12 @@
     restoreSelection(prevNoteId);
   });
 
+  searchInput.addEventListener("input", function () {
+    var prevNoteId = displayCards[currentIndex] ? displayCards[currentIndex].note_id : null;
+    applyFilterSort();
+    restoreSelection(prevNoteId);
+  });
+
   // ── Image paste handler ──
 
   document.addEventListener("paste", function (e) {
@@ -386,6 +451,7 @@
             var img = document.createElement("img");
             img.src = res.data_uri;
             fieldEl.appendChild(img);
+            layoutImages(fieldEl);
           }
           showToast("Image pasted");
           // Re-apply filter if active (card may now match/unmatch image filter)
@@ -421,6 +487,7 @@
           var img = document.createElement("img");
           img.src = res.data_uri;
           fieldEl.appendChild(img);
+          layoutImages(fieldEl);
         }
         showToast("Image added");
         // Re-apply filter if active
@@ -454,6 +521,7 @@
           return;
         }
         imgToRemove.remove();
+        layoutImages(fieldEl);
         // Update in-memory card field: strip the Nth <img> tag
         var tmp = document.createElement("div");
         tmp.innerHTML = card.fields[fieldName];
@@ -674,7 +742,8 @@
         return;
       }
 
-      // Reset filter/sort to defaults
+      // Reset filter/sort/search to defaults
+      searchInput.value = "";
       filterImages.value = "all";
       sortOrder.value = "original";
       displayCards = cards.slice();
