@@ -255,8 +255,11 @@
     var items = cardList.querySelectorAll(".card-item");
     if (items[index]) {
       items[index].innerHTML =
+        '<span class="card-item-num">' + (index + 1) + '</span>' +
+        '<div class="card-item-body">' +
         '<div class="card-item-title">' + escapeHtml(frontText) + '</div>' +
-        (sub ? '<div class="card-item-sub">' + escapeHtml(sub) + '</div>' : "");
+        (sub ? '<div class="card-item-sub">' + escapeHtml(sub) + '</div>' : "") +
+        '</div>';
     }
   }
 
@@ -326,6 +329,66 @@
       });
     });
 
+    // Bind drag-and-drop for image files
+    document.querySelectorAll(".field-value").forEach(function (el) {
+      el.addEventListener("dragover", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.add("drop-target");
+      });
+      el.addEventListener("dragleave", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove("drop-target");
+      });
+      el.addEventListener("drop", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove("drop-target");
+
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (!files || files.length === 0) return;
+
+        var fieldName = el.dataset.fieldName;
+        var card = displayCards[currentIndex];
+        if (!card) return;
+
+        for (var i = 0; i < files.length; i++) {
+          (function (file) {
+            if (file.type.indexOf("image/") !== 0) return;
+
+            var reader = new FileReader();
+            reader.onload = function () {
+              var base64Data = reader.result.split(",")[1];
+              pywebview.api.paste_image(card.note_id, fieldName, base64Data, file.type)
+                .then(function (res) {
+                  if (!res.ok) {
+                    showToast("Drop failed: " + res.error);
+                    return;
+                  }
+                  card.fields[fieldName] += '<img src="' + res.data_uri + '">';
+                  var emptySpan = el.querySelector('span[style]');
+                  if (emptySpan && emptySpan.textContent === "(empty)") {
+                    emptySpan.remove();
+                  }
+                  var img = document.createElement("img");
+                  img.src = res.data_uri;
+                  el.appendChild(img);
+                  layoutImages(el);
+                  showToast("Image added");
+                  if (filterImages.value !== "all") {
+                    var prevNoteId = card.note_id;
+                    applyFilterSort();
+                    restoreSelection(prevNoteId);
+                  }
+                });
+            };
+            reader.readAsDataURL(file);
+          })(files[i]);
+        }
+      });
+    });
+
     // Clear image selection when switching cards
     clearImgSelection();
     editingField = null;
@@ -373,8 +436,11 @@
       const item = document.createElement("div");
       item.className = "card-item";
       item.innerHTML =
+        '<span class="card-item-num">' + (i + 1) + '</span>' +
+        '<div class="card-item-body">' +
         '<div class="card-item-title">' + escapeHtml(frontText) + '</div>' +
-        (sub ? '<div class="card-item-sub">' + escapeHtml(sub) + '</div>' : "");
+        (sub ? '<div class="card-item-sub">' + escapeHtml(sub) + '</div>' : "") +
+        '</div>';
       item.addEventListener("click", function () { showCard(i); });
       cardList.appendChild(item);
     });
@@ -394,10 +460,14 @@
     restoreSelection(prevNoteId);
   });
 
+  var searchTimer = null;
   searchInput.addEventListener("input", function () {
-    var prevNoteId = displayCards[currentIndex] ? displayCards[currentIndex].note_id : null;
-    applyFilterSort();
-    restoreSelection(prevNoteId);
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      var prevNoteId = displayCards[currentIndex] ? displayCards[currentIndex].note_id : null;
+      applyFilterSort();
+      restoreSelection(prevNoteId);
+    }, 150);
   });
 
   // ── Image paste handler ──
@@ -666,15 +736,21 @@
       showToast("No cards to inherit model from");
       return;
     }
-    var modelId = displayCards[currentIndex >= 0 ? currentIndex : 0].model_id;
-    pywebview.api.create_card(modelId)
+    var selectedCard = displayCards[currentIndex >= 0 ? currentIndex : 0];
+    var modelId = selectedCard.model_id;
+
+    // Find position in master cards array — insert after current card
+    var masterIndex = cards.indexOf(selectedCard);
+    var insertPosition = masterIndex >= 0 ? masterIndex + 1 : cards.length;
+
+    pywebview.api.create_card(modelId, insertPosition)
       .then(function (res) {
         if (!res.ok) {
           showToast("Create failed: " + res.error);
           return;
         }
-        // Add new card to cards array
-        cards.push(res.card);
+        // Insert new card at the correct position in master array
+        cards.splice(insertPosition, 0, res.card);
         // Re-apply filter/sort and select the new card
         applyFilterSort();
         restoreSelection(res.card.note_id);
@@ -784,8 +860,9 @@
   document.addEventListener("dragover", function (e) {
     e.preventDefault();
     e.stopPropagation();
-    if (!viewer.classList.contains("hidden")) return;
-    dropZone.classList.add("drag-over");
+    if (viewer.classList.contains("hidden")) {
+      dropZone.classList.add("drag-over");
+    }
   });
 
   document.addEventListener("dragleave", function (e) {

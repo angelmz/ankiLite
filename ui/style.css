@@ -403,12 +403,30 @@ html, body {
 }
 
 .card-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
   margin-bottom: 2px;
   transition: background 0.1s;
   line-height: 1.4;
+}
+
+.card-item-num {
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.card-item.active .card-item-num {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.card-item-body {
+  min-width: 0;
+  flex: 1;
 }
 
 .card-item:hover {
@@ -521,6 +539,11 @@ html, body {
 .field-value.field-selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+
+.field-value.drop-target {
+  border-color: var(--accent);
+  background: rgba(0, 122, 255, 0.04);
 }
 
 .field-value img {

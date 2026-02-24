@@ -208,6 +208,12 @@ class DeckSession:
         else:
             self._next_media_key = 0
 
+        # Build a map of note_id -> card due position for ordering
+        card_positions = {}
+        for row in self.conn.execute("SELECT nid, due FROM cards ORDER BY due"):
+            if row[0] not in card_positions:
+                card_positions[row[0]] = row[1]
+
         notes = self.conn.execute("SELECT id, mid, flds, mod FROM notes").fetchall()
         cards = []
         for note in notes:
@@ -239,6 +245,17 @@ class DeckSession:
                 "created_ts": note_id // 1000,
                 "mod_ts": mod_ts,
             })
+
+        # Sort cards by their due position in the cards table
+        cards.sort(key=lambda c: card_positions.get(c["note_id"], 0))
+
+        # Normalize due values to sequential 0, 1, 2, ...
+        for i, card in enumerate(cards):
+            self.conn.execute(
+                "UPDATE cards SET due = ? WHERE nid = ?",
+                (i, card["note_id"]),
+            )
+        self.conn.commit()
 
         return cards
 
@@ -395,8 +412,12 @@ class DeckSession:
         self.conn.commit()
         return {"ok": True}
 
-    def create_card(self, model_id):
-        """Create a new card with empty fields for the given model."""
+    def create_card(self, model_id, position=None):
+        """Create a new card with empty fields for the given model.
+
+        If position is given (0-indexed), insert at that position and shift
+        subsequent cards' due values forward.
+        """
         model = self.models.get(model_id)
         if model is None:
             return {"ok": False, "error": "Model not found"}
@@ -413,6 +434,18 @@ class DeckSession:
             return {"ok": False, "error": "No cards in deck to determine deck_id"}
         deck_id = row[0]
 
+        # Determine due position
+        if position is not None:
+            # Shift existing cards at or after this position
+            self.conn.execute(
+                "UPDATE cards SET due = due + 1 WHERE due >= ?",
+                (position,),
+            )
+            due = position
+        else:
+            row = self.conn.execute("SELECT MAX(due) FROM cards").fetchone()
+            due = (row[0] + 1) if row[0] is not None else 0
+
         # Create empty fields joined by \x1f
         field_count = len(model["fields"])
         empty_fields = "\x1f".join([""] * field_count)
@@ -424,11 +457,11 @@ class DeckSession:
             (note_id, guid, model_id, now, empty_fields),
         )
 
-        # Insert into cards table
+        # Insert into cards table with correct due position
         self.conn.execute(
             """INSERT INTO cards (id, nid, did, ord, mod, usn, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data)
-               VALUES (?, ?, ?, 0, ?, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '')""",
-            (card_id, note_id, deck_id, now),
+               VALUES (?, ?, ?, 0, ?, -1, 0, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, '')""",
+            (card_id, note_id, deck_id, now, due),
         )
         self.conn.commit()
 
@@ -453,10 +486,24 @@ class DeckSession:
         if row is None:
             return {"ok": False, "error": "Note not found"}
 
+        # Get the due value before deleting so we can shift subsequent cards
+        card_row = self.conn.execute(
+            "SELECT due FROM cards WHERE nid = ?", (note_id,)
+        ).fetchone()
+        due_val = card_row[0] if card_row else None
+
         # Delete from cards table first (references note)
         self.conn.execute("DELETE FROM cards WHERE nid = ?", (note_id,))
         # Delete from notes table
         self.conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+
+        # Shift subsequent cards' positions down to keep sequential ordering
+        if due_val is not None:
+            self.conn.execute(
+                "UPDATE cards SET due = due - 1 WHERE due > ?",
+                (due_val,),
+            )
+
         self.conn.commit()
         return {"ok": True}
 

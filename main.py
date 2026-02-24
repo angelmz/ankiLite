@@ -245,12 +245,12 @@ class Api:
         save_settings(settings)
         return {"ok": True}
 
-    def create_card(self, model_id):
+    def create_card(self, model_id, position=None):
         """Create a new card with empty fields for the given model."""
         if not self.session:
             return {"ok": False, "error": "No deck loaded"}
         try:
-            return self.session.create_card(model_id)
+            return self.session.create_card(model_id, position)
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
