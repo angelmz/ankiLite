@@ -64,7 +64,14 @@ class Api:
             self.session = DeckSession(path)
             cards = self.session.open()
             add_recent_file(path)  # Track this file
-            return {"ok": True, "cards": cards}
+            models = {}
+            for mid, model in self.session.models.items():
+                models[str(mid)] = {
+                    "name": model["name"],
+                    "templates": model.get("templates", []),
+                    "css": model.get("css", ""),
+                }
+            return {"ok": True, "cards": cards, "models": models}
         except Exception as e:
             self._close_session()
             return {"ok": False, "error": str(e)}

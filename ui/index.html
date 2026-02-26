@@ -62,8 +62,16 @@
       <div id="card-list"></div>
     </div>
     <div id="main">
+      <div id="view-toggle">
+        <button id="btn-editor" class="toggle-btn active">Editor</button>
+        <button id="btn-preview" class="toggle-btn">Preview</button>
+      </div>
       <div id="card-display">
         <div id="card-fields"></div>
+        <div id="card-preview" class="hidden">
+          <iframe id="preview-iframe" sandbox="allow-same-origin" frameborder="0"></iframe>
+          <button id="btn-flip">Show Back</button>
+        </div>
       </div>
       <div id="card-actions">
         <button id="btn-delete-card" title="Delete this card">Delete Card</button>

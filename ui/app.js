@@ -29,6 +29,11 @@
   const deleteConfirmOverlay = document.getElementById("delete-confirm-overlay");
   const btnDeleteCancel = document.getElementById("btn-delete-cancel");
   const btnDeleteConfirm = document.getElementById("btn-delete-confirm");
+  const btnEditor = document.getElementById("btn-editor");
+  const btnPreview = document.getElementById("btn-preview");
+  const cardPreview = document.getElementById("card-preview");
+  const previewIframe = document.getElementById("preview-iframe");
+  const btnFlip = document.getElementById("btn-flip");
 
   let cards = [];
   let displayCards = [];
@@ -36,6 +41,9 @@
   let selectedFieldName = null;
   let selectedImg = null;
   let editingField = null;
+  let models = {};
+  let previewMode = false;
+  let previewShowingBack = false;
 
   // ── Filter & sort helpers ──
 
@@ -263,11 +271,114 @@
     }
   }
 
+  // ── Anki template engine ──
+
+  function renderAnkiTemplate(templateStr, fields, frontHtml) {
+    if (!templateStr) return "";
+    var result = templateStr;
+
+    // {{FrontSide}} — insert rendered front (used in back templates)
+    result = result.replace(/\{\{FrontSide\}\}/gi, frontHtml || "");
+
+    // {{#Field}}...{{/Field}} — conditional: show block if field non-empty
+    result = result.replace(/\{\{#(\w+)\}\}([\s\S]*?)\{\{\/\1\}\}/g, function (match, name, content) {
+      var val = fields[name];
+      return (val && val.trim()) ? content : "";
+    });
+
+    // {{^Field}}...{{/Field}} — inverted conditional: show block if field empty
+    result = result.replace(/\{\{\^(\w+)\}\}([\s\S]*?)\{\{\/\1\}\}/g, function (match, name, content) {
+      var val = fields[name];
+      return (!val || !val.trim()) ? content : "";
+    });
+
+    // {{hint:Field}} — clickable hint
+    result = result.replace(/\{\{hint:(\w+)\}\}/g, function (match, name) {
+      var val = fields[name] || "";
+      if (!val.trim()) return "";
+      return '<a class="hint" onclick="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'">Show ' + name + '</a><span style="display:none">' + val + '</span>';
+    });
+
+    // {{type:Field}} — type-in answer placeholder
+    result = result.replace(/\{\{type:(\w+)\}\}/g, function (match, name) {
+      return '<input type="text" disabled placeholder="type ' + name + '" style="width:100%;padding:4px;border:1px solid #ccc;border-radius:4px;font-size:inherit;">';
+    });
+
+    // {{cloze:Field}} — cloze deletion rendering
+    result = result.replace(/\{\{cloze:(\w+)\}\}/g, function (match, name) {
+      var val = fields[name] || "";
+      // Replace {{c1::answer::hint}} or {{c1::answer}} patterns
+      val = val.replace(/\{\{c(\d+)::([\s\S]*?)(?:::([\s\S]*?))?\}\}/g, function (m, num, answer, hint) {
+        return '<span style="color:#00f;font-weight:bold">[' + (hint || answer) + ']</span>';
+      });
+      return val;
+    });
+
+    // {{FieldName}} — simple field substitution
+    result = result.replace(/\{\{([^#^/!{}\s][^{}]*?)\}\}/g, function (match, name) {
+      name = name.trim();
+      if (name === "FrontSide") return frontHtml || "";
+      if (fields.hasOwnProperty(name)) return fields[name] || "";
+      return match;
+    });
+
+    return result;
+  }
+
+  function showPreview(index) {
+    if (index < 0 || index >= displayCards.length) return;
+    var card = displayCards[index];
+    var modelId = String(card.model_id);
+    var model = models[modelId];
+    if (!model || !model.templates || model.templates.length === 0) {
+      previewIframe.srcdoc = '<div style="padding:20px;color:#999;font-family:sans-serif;">No template available for this note type.</div>';
+      return;
+    }
+
+    var ord = card.card_ord || 0;
+    var tmpl = model.templates[ord] || model.templates[0];
+
+    var frontHtml = renderAnkiTemplate(tmpl.qfmt, card.fields, "");
+    var bodyHtml;
+    if (previewShowingBack) {
+      bodyHtml = renderAnkiTemplate(tmpl.afmt, card.fields, frontHtml);
+      btnFlip.textContent = "Show Front";
+    } else {
+      bodyHtml = frontHtml;
+      btnFlip.textContent = "Show Back";
+    }
+
+    var css = model.css || "";
+    var doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>' +
+      'body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; }' +
+      '.card { text-align: center; }' +
+      'img { max-width: 100%; height: auto; }' +
+      css +
+      '</style></head><body><div class="card">' + bodyHtml + '</div></body></html>';
+
+    previewIframe.srcdoc = doc;
+
+    // Auto-size iframe height after content loads
+    previewIframe.onload = function () {
+      try {
+        var h = previewIframe.contentDocument.body.scrollHeight;
+        previewIframe.style.height = Math.max(h + 40, 200) + "px";
+      } catch (e) {
+        previewIframe.style.height = "400px";
+      }
+    };
+  }
+
   // ── Card display ──
 
   function showCard(index) {
     if (index < 0 || index >= displayCards.length) return;
     currentIndex = index;
+
+    if (previewMode) {
+      previewShowingBack = false;
+      showPreview(index);
+    }
 
     const card = displayCards[index];
     const fieldNames = Object.keys(card.fields);
@@ -729,6 +840,34 @@
       });
   });
 
+  // ── Preview toggle handlers ──
+
+  btnEditor.addEventListener("click", function () {
+    if (!previewMode) return;
+    previewMode = false;
+    btnEditor.classList.add("active");
+    btnPreview.classList.remove("active");
+    cardFields.classList.remove("hidden");
+    cardPreview.classList.add("hidden");
+    if (currentIndex >= 0) showCard(currentIndex);
+  });
+
+  btnPreview.addEventListener("click", function () {
+    if (previewMode) return;
+    previewMode = true;
+    btnPreview.classList.add("active");
+    btnEditor.classList.remove("active");
+    cardPreview.classList.remove("hidden");
+    cardFields.classList.add("hidden");
+    previewShowingBack = false;
+    if (currentIndex >= 0) showPreview(currentIndex);
+  });
+
+  btnFlip.addEventListener("click", function () {
+    previewShowingBack = !previewShowingBack;
+    if (currentIndex >= 0) showPreview(currentIndex);
+  });
+
   // ── Create card handler ──
 
   btnAddCard.addEventListener("click", function () {
@@ -813,6 +952,7 @@
         return;
       }
       cards = result.cards;
+      models = result.models || {};
       if (cards.length === 0) {
         alert("No cards found in this deck.");
         return;
@@ -841,9 +981,16 @@
     pywebview.api.close_session();
     cards = [];
     displayCards = [];
+    models = {};
     currentIndex = -1;
     selectedFieldName = null;
     editingField = null;
+    previewMode = false;
+    previewShowingBack = false;
+    btnEditor.classList.add("active");
+    btnPreview.classList.remove("active");
+    cardFields.classList.remove("hidden");
+    cardPreview.classList.add("hidden");
     cardList.innerHTML = "";
     cardFields.innerHTML = "";
     viewer.classList.add("hidden");
@@ -914,6 +1061,14 @@
       if (e.key === "Escape") {
         document.activeElement.blur();
       }
+      return;
+    }
+
+    // Spacebar flips front/back in preview mode
+    if (previewMode && e.key === " ") {
+      e.preventDefault();
+      previewShowingBack = !previewShowingBack;
+      if (currentIndex >= 0) showPreview(currentIndex);
       return;
     }
 

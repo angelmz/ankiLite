@@ -99,33 +99,161 @@ def _detect_schema(conn):
 def _get_models_legacy(conn):
     """Extract model definitions from legacy schema (col.models JSON).
 
-    Returns {mid: {"name": str, "fields": [field_name, ...]}}.
+    Returns {mid: {"name": str, "fields": [field_name, ...], "templates": [...], "css": str}}.
     """
     row = conn.execute("SELECT models FROM col").fetchone()
     models_json = json.loads(row[0])
     result = {}
     for mid, model in models_json.items():
         fields = [f["name"] for f in sorted(model["flds"], key=lambda x: x["ord"])]
-        result[int(mid)] = {"name": model["name"], "fields": fields}
+        templates = [{"name": t["name"], "qfmt": t["qfmt"], "afmt": t["afmt"], "ord": t["ord"]}
+                     for t in sorted(model.get("tmpls", []), key=lambda x: x["ord"])]
+        result[int(mid)] = {"name": model["name"], "fields": fields, "templates": templates, "css": model.get("css", "")}
     return result
+
+
+def _extract_css_from_notetype_config(blob):
+    """Extract CSS string from Anki's NoteType protobuf config blob.
+
+    CSS is stored as field 8 (wire type 2 = length-delimited) in the protobuf.
+    Returns empty string if extraction fails.
+    """
+    if not blob:
+        return ""
+    try:
+        i = 0
+        while i < len(blob):
+            # Read varint tag
+            tag = 0
+            shift = 0
+            while i < len(blob):
+                b = blob[i]
+                i += 1
+                tag |= (b & 0x7F) << shift
+                shift += 7
+                if not (b & 0x80):
+                    break
+            field_number = tag >> 3
+            wire_type = tag & 0x07
+            if wire_type == 0:  # varint
+                while i < len(blob) and blob[i] & 0x80:
+                    i += 1
+                i += 1
+            elif wire_type == 2:  # length-delimited
+                length = 0
+                shift = 0
+                while i < len(blob):
+                    b = blob[i]
+                    i += 1
+                    length |= (b & 0x7F) << shift
+                    shift += 7
+                    if not (b & 0x80):
+                        break
+                data = blob[i:i + length]
+                i += length
+                if field_number == 8:
+                    return data.decode("utf-8", errors="replace")
+            elif wire_type == 5:  # 32-bit
+                i += 4
+            elif wire_type == 1:  # 64-bit
+                i += 8
+            else:
+                break
+    except Exception:
+        pass
+    return ""
 
 
 def _get_models_modern(conn):
     """Extract model definitions from modern schema (notetypes + fields tables).
 
-    Returns {mid: {"name": str, "fields": [field_name, ...]}}.
+    Returns {mid: {"name": str, "fields": [field_name, ...], "templates": [...], "css": str}}.
     """
+    # Check if templates table exists
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    has_templates_table = "templates" in tables
+
     result = {}
-    notetypes = conn.execute("SELECT id, name FROM notetypes").fetchall()
+    notetypes = conn.execute("SELECT id, name, config FROM notetypes").fetchall()
     for nt in notetypes:
         mid = nt[0]
         name = nt[1]
+        config_blob = nt[2] if len(nt) > 2 else None
         fields_rows = conn.execute(
             "SELECT name FROM fields WHERE ntid = ? ORDER BY ord", (mid,)
         ).fetchall()
         fields = [r[0] for r in fields_rows]
-        result[mid] = {"name": name, "fields": fields}
+
+        templates = []
+        if has_templates_table:
+            tmpl_rows = conn.execute(
+                "SELECT name, config FROM templates WHERE ntid = ? ORDER BY ord", (mid,)
+            ).fetchall()
+            for idx, tr in enumerate(tmpl_rows):
+                tmpl_name = tr[0]
+                tmpl_config = tr[1]
+                qfmt, afmt = _extract_template_qfmt_afmt(tmpl_config)
+                templates.append({"name": tmpl_name, "qfmt": qfmt, "afmt": afmt, "ord": idx})
+
+        css = _extract_css_from_notetype_config(config_blob) if config_blob else ""
+        result[mid] = {"name": name, "fields": fields, "templates": templates, "css": css}
     return result
+
+
+def _extract_template_qfmt_afmt(config_blob):
+    """Extract qfmt and afmt from a template's protobuf config blob.
+
+    In Anki's Template protobuf, qfmt is field 2 and afmt is field 3.
+    """
+    qfmt = ""
+    afmt = ""
+    if not config_blob:
+        return qfmt, afmt
+    try:
+        i = 0
+        while i < len(config_blob):
+            tag = 0
+            shift = 0
+            while i < len(config_blob):
+                b = config_blob[i]
+                i += 1
+                tag |= (b & 0x7F) << shift
+                shift += 7
+                if not (b & 0x80):
+                    break
+            field_number = tag >> 3
+            wire_type = tag & 0x07
+            if wire_type == 0:  # varint
+                while i < len(config_blob) and config_blob[i] & 0x80:
+                    i += 1
+                i += 1
+            elif wire_type == 2:  # length-delimited
+                length = 0
+                shift = 0
+                while i < len(config_blob):
+                    b = config_blob[i]
+                    i += 1
+                    length |= (b & 0x7F) << shift
+                    shift += 7
+                    if not (b & 0x80):
+                        break
+                data = config_blob[i:i + length]
+                i += length
+                if field_number == 2:
+                    qfmt = data.decode("utf-8", errors="replace")
+                elif field_number == 3:
+                    afmt = data.decode("utf-8", errors="replace")
+            elif wire_type == 5:  # 32-bit
+                i += 4
+            elif wire_type == 1:  # 64-bit
+                i += 8
+            else:
+                break
+    except Exception:
+        pass
+    return qfmt, afmt
 
 
 def _media_to_base64(filename, tmp_dir, media_map):
@@ -208,11 +336,14 @@ class DeckSession:
         else:
             self._next_media_key = 0
 
-        # Build a map of note_id -> card due position for ordering
+        # Build a map of note_id -> (card due position, card ord) for ordering
         card_positions = {}
-        for row in self.conn.execute("SELECT nid, due FROM cards ORDER BY due"):
+        card_ords = {}
+        for row in self.conn.execute("SELECT nid, due, ord FROM cards ORDER BY due"):
             if row[0] not in card_positions:
                 card_positions[row[0]] = row[1]
+            if row[0] not in card_ords:
+                card_ords[row[0]] = row[2]
 
         notes = self.conn.execute("SELECT id, mid, flds, mod FROM notes").fetchall()
         cards = []
@@ -244,6 +375,7 @@ class DeckSession:
                 "fields": fields,
                 "created_ts": note_id // 1000,
                 "mod_ts": mod_ts,
+                "card_ord": card_ords.get(note_id, 0),
             })
 
         # Sort cards by their due position in the cards table

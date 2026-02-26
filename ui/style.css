@@ -467,10 +467,80 @@ html, body {
   overflow: hidden;
 }
 
+/* View toggle bar */
+#view-toggle {
+  display: flex;
+  padding: 10px 40px 0;
+  gap: 0;
+}
+
+.toggle-btn {
+  padding: 6px 18px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.toggle-btn:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.toggle-btn:last-child {
+  border-radius: 0 6px 6px 0;
+  border-left: none;
+}
+
+.toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.toggle-btn:not(.active):hover {
+  background: var(--hover);
+}
+
 #card-display {
   flex: 1;
   overflow-y: auto;
   padding: 32px 40px;
+}
+
+/* Preview mode */
+#card-preview {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+#preview-iframe {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  min-height: 200px;
+}
+
+#btn-flip {
+  display: block;
+  margin: 16px auto 0;
+  padding: 8px 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#btn-flip:hover {
+  background: var(--hover);
 }
 
 #card-fields {

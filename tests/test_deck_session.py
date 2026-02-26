@@ -36,6 +36,15 @@ def _make_apkg(path, cards=None, wal_mode=False):
                 {"name": "Front", "ord": 0},
                 {"name": "Back", "ord": 1},
             ],
+            "tmpls": [
+                {
+                    "name": "Card 1",
+                    "qfmt": "{{Front}}",
+                    "afmt": "{{FrontSide}}<hr id=answer>{{Back}}",
+                    "ord": 0,
+                }
+            ],
+            "css": ".card { font-family: arial; }",
         }
     }
     conn.execute("INSERT INTO col VALUES (1, ?)", (json.dumps(models),))
@@ -49,10 +58,16 @@ def _make_apkg(path, cards=None, wal_mode=False):
         )
     conn.execute(
         "CREATE TABLE cards "
-        "(id INTEGER PRIMARY KEY, nid INTEGER, did INTEGER, ord INTEGER)"
+        "(id INTEGER PRIMARY KEY, nid INTEGER, did INTEGER, ord INTEGER, "
+        "mod INTEGER, usn INTEGER, type INTEGER, queue INTEGER, due INTEGER, "
+        "ivl INTEGER, factor INTEGER, reps INTEGER, lapses INTEGER, left INTEGER, "
+        "odue INTEGER, odid INTEGER, flags INTEGER, data TEXT)"
     )
-    for nid, _, _ in cards:
-        conn.execute("INSERT INTO cards VALUES (?, ?, 1, 0)", (nid * 10, nid))
+    for idx, (nid, _, _) in enumerate(cards):
+        conn.execute(
+            "INSERT INTO cards VALUES (?, ?, 1, 0, 0, 0, 0, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, '')",
+            (nid * 10, nid, idx),
+        )
     conn.commit()
     conn.close()
 
@@ -414,3 +429,31 @@ class TestDeckSession:
         row = session.conn.execute("PRAGMA journal_mode").fetchone()
         assert row[0] == "delete"
         session.close()
+
+    def test_open_returns_templates(self, apkg_file):
+        """Models include templates and CSS after opening."""
+        session = DeckSession(apkg_file)
+        try:
+            session.open()
+            model = session.models[1]
+            assert "templates" in model
+            assert len(model["templates"]) == 1
+            tmpl = model["templates"][0]
+            assert tmpl["name"] == "Card 1"
+            assert "{{Front}}" in tmpl["qfmt"]
+            assert "{{Back}}" in tmpl["afmt"]
+            assert tmpl["ord"] == 0
+            assert "css" in model
+            assert "font-family" in model["css"]
+        finally:
+            session.close()
+
+    def test_card_has_card_ord(self, apkg_file):
+        """Cards include card_ord from the cards table."""
+        session = DeckSession(apkg_file)
+        try:
+            cards = session.open()
+            assert "card_ord" in cards[0]
+            assert cards[0]["card_ord"] == 0
+        finally:
+            session.close()
