@@ -34,6 +34,8 @@
   const cardPreview = document.getElementById("card-preview");
   const previewIframe = document.getElementById("preview-iframe");
   const btnFlip = document.getElementById("btn-flip");
+  const contextMenu = document.getElementById("context-menu");
+  const ctxShowInFinder = document.getElementById("ctx-show-in-finder");
 
   let cards = [];
   let displayCards = [];
@@ -44,6 +46,7 @@
   let models = {};
   let previewMode = false;
   let previewShowingBack = false;
+  let contextMenuPath = null;
 
   // ── Filter & sort helpers ──
 
@@ -762,10 +765,11 @@
       });
   });
 
-  // Close dropdown when clicking outside
+  // Close dropdowns and context menu when clicking outside
   document.addEventListener("click", function () {
     saveDropdown.classList.add("hidden");
     recentDropdown.classList.add("hidden");
+    contextMenu.classList.add("hidden");
   });
 
   // ── Recent files handlers ──
@@ -786,12 +790,20 @@
           '</button>';
       }).join("");
 
-      // Bind click handlers to recent items
+      // Bind click and context menu handlers to recent items
       recentList.querySelectorAll(".recent-item").forEach(function (item) {
         item.addEventListener("click", function (e) {
           e.stopPropagation();
           recentDropdown.classList.add("hidden");
           loadDeck(item.dataset.path);
+        });
+        item.addEventListener("contextmenu", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          contextMenuPath = item.dataset.path;
+          contextMenu.style.left = e.clientX + "px";
+          contextMenu.style.top = e.clientY + "px";
+          contextMenu.classList.remove("hidden");
         });
       });
     } catch (e) {
@@ -811,6 +823,16 @@
       loadRecentFiles();
       showToast("Recent files cleared");
     });
+  });
+
+  // Context menu: Show in Finder
+  ctxShowInFinder.addEventListener("click", function (e) {
+    e.stopPropagation();
+    contextMenu.classList.add("hidden");
+    if (contextMenuPath) {
+      pywebview.api.reveal_in_finder(contextMenuPath);
+      contextMenuPath = null;
+    }
   });
 
   // ── Settings handlers ──

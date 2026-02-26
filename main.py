@@ -245,6 +245,14 @@ class Api:
             save_settings(settings)
         return valid
 
+    def reveal_in_finder(self, path):
+        """Reveal a file in macOS Finder."""
+        try:
+            subprocess.run(["open", "-R", path])
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def clear_recent_files(self):
         """Clear the recent files list."""
         settings = load_settings()

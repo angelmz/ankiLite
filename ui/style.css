@@ -182,6 +182,35 @@ html, body {
   color: var(--text);
 }
 
+/* Context menu */
+#context-menu {
+  position: fixed;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 200;
+  min-width: 160px;
+  overflow: hidden;
+}
+
+#context-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+#context-menu button:hover {
+  background: var(--hover);
+}
+
 /* Viewer layout */
 #viewer {
   display: flex;
