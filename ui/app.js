@@ -601,8 +601,16 @@
       }
     }
 
-    // No image in clipboard — let normal text paste work if editing
-    if (!imageItem) return;
+    // No image in clipboard — force plain-text paste in editable fields
+    if (!imageItem) {
+      var target = e.target.closest && e.target.closest('.field-value');
+      if (target) {
+        e.preventDefault();
+        var text = e.clipboardData.getData('text/plain');
+        document.execCommand('insertText', false, text);
+      }
+      return;
+    }
 
     // Determine target field: the focused editing field, or the selected field
     var targetField = editingField || selectedFieldName;
