@@ -446,16 +446,19 @@
     // Bind drag-and-drop for image files
     document.querySelectorAll(".field-value").forEach(function (el) {
       el.addEventListener("dragover", function (e) {
+        el.contentEditable = "false";
         e.preventDefault();
         e.stopPropagation();
         el.classList.add("drop-target");
       });
       el.addEventListener("dragleave", function (e) {
+        el.contentEditable = "true";
         e.preventDefault();
         e.stopPropagation();
         el.classList.remove("drop-target");
       });
       el.addEventListener("drop", function (e) {
+        el.contentEditable = "true";
         e.preventDefault();
         e.stopPropagation();
         el.classList.remove("drop-target");
