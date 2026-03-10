@@ -22,6 +22,9 @@
           <button id="btn-clear-recent">Clear Recent</button>
         </div>
       </div>
+      <div id="create-group">
+        <button id="btn-create">Create New Deck</button>
+      </div>
     </div>
   </div>
 
@@ -109,6 +112,19 @@
       <div class="confirm-buttons">
         <button id="btn-delete-cancel">Cancel</button>
         <button id="btn-delete-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create deck dialog -->
+  <div id="create-deck-overlay" class="hidden">
+    <div id="create-deck-panel">
+      <h3>Create New Deck</h3>
+      <p>Enter a name for your new deck.</p>
+      <input type="text" id="create-deck-name" placeholder="Deck name" autocomplete="off">
+      <div class="confirm-buttons">
+        <button id="btn-create-cancel">Cancel</button>
+        <button id="btn-create-confirm">Create</button>
       </div>
     </div>
   </div>

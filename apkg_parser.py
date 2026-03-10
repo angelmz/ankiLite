@@ -316,6 +316,122 @@ class DeckSession:
         self.models = {}
         self._next_media_key = 0
         self._uri_to_filename = {}  # data_uri → media filename for de-inlining
+        self.deck_id = None
+
+    @classmethod
+    def create_new(cls, deck_name):
+        """Create a brand-new empty deck with one Basic card.
+
+        Returns (session, [card_dict]).
+        """
+        session = cls.__new__(cls)
+        session.apkg_path = None
+        session.tmp_dir = tempfile.mkdtemp(prefix="ankiLite_")
+        session.media_map = {}
+        session._next_media_key = 0
+        session._uri_to_filename = {}
+
+        now = int(time.time())
+        deck_id = 1
+        model_id = 1000000000
+
+        db_path = os.path.join(session.tmp_dir, "collection.anki2")
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=DELETE")
+
+        # Create tables
+        conn.execute(
+            """CREATE TABLE col (
+                id integer PRIMARY KEY, crt integer, mod integer, scm integer,
+                ver integer, dty integer, usn integer, ls integer,
+                conf text, models text, decks text, dconf text, tags text
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE notes (
+                id integer PRIMARY KEY, guid text, mid integer, mod integer,
+                usn integer, tags text, flds text, sfld text,
+                csum integer, flags integer, data text
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE cards (
+                id integer PRIMARY KEY, nid integer, did integer, ord integer,
+                mod integer, usn integer, type integer, queue integer,
+                due integer, ivl integer, factor integer, reps integer,
+                lapses integer, left integer, odue integer, odid integer,
+                flags integer, data text
+            )"""
+        )
+        conn.execute("CREATE TABLE revlog (id integer PRIMARY KEY, cid integer, usn integer, ease integer, ivl integer, lastIvl integer, factor integer, time integer, type integer)")
+        conn.execute("CREATE TABLE graves (usn integer, oid integer, type integer)")
+
+        models_json = json.dumps({
+            str(model_id): {
+                "id": model_id,
+                "name": "Basic",
+                "flds": [
+                    {"name": "Front", "ord": 0, "sticky": False, "rtl": False, "font": "Arial", "size": 20, "media": []},
+                    {"name": "Back", "ord": 1, "sticky": False, "rtl": False, "font": "Arial", "size": 20, "media": []},
+                ],
+                "tmpls": [
+                    {"name": "Card 1", "ord": 0, "qfmt": "{{Front}}", "afmt": "{{FrontSide}}<hr id=answer>{{Back}}"},
+                ],
+                "css": ".card { font-family: arial; font-size: 20px; text-align: center; color: black; background-color: white; }",
+                "mod": now, "type": 0, "usn": -1, "sortf": 0,
+                "did": deck_id, "vers": [], "tags": [], "req": [[0, "all", [0]]],
+            }
+        })
+
+        decks_json = json.dumps({
+            str(deck_id): {
+                "id": deck_id, "name": deck_name, "mod": now, "usn": -1,
+                "lrnToday": [0, 0], "revToday": [0, 0], "newToday": [0, 0],
+                "timeToday": [0, 0], "collapsed": False, "desc": "",
+                "dyn": 0, "conf": 1, "extendNew": 10, "extendRev": 50,
+            }
+        })
+
+        conf_json = json.dumps({})
+        dconf_json = json.dumps({"1": {"id": 1, "name": "Default", "mod": 0, "usn": 0, "maxTaken": 60, "autoplay": True, "timer": 0, "replayq": True, "new": {"delays": [1, 10], "ints": [1, 4, 7], "initialFactor": 2500, "order": 1, "perDay": 20}, "rev": {"perDay": 200, "ease4": 1.3, "fuzz": 0.05, "minSpace": 1, "ivlFct": 1, "maxIvl": 36500}, "lapse": {"delays": [10], "mult": 0, "minInt": 1, "leechFails": 8, "leechAction": 0}}})
+
+        conn.execute(
+            "INSERT INTO col VALUES (1, ?, ?, ?, 11, 0, 0, 0, ?, ?, ?, ?, '')",
+            (now, now, now, conf_json, models_json, decks_json, dconf_json),
+        )
+
+        # Insert one empty starter card
+        note_id = int(time.time() * 1000)
+        card_id = note_id + 1
+        guid = str(uuid.uuid4())[:10]
+        empty_flds = "\x1f"  # Front\x1fBack (both empty)
+
+        conn.execute(
+            "INSERT INTO notes (id, guid, mid, mod, usn, tags, flds, sfld, csum, flags, data) VALUES (?, ?, ?, ?, -1, '', ?, '', 0, 0, '')",
+            (note_id, guid, model_id, now, empty_flds),
+        )
+        conn.execute(
+            "INSERT INTO cards (id, nid, did, ord, mod, usn, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data) VALUES (?, ?, ?, 0, ?, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '')",
+            (card_id, note_id, deck_id, now),
+        )
+        conn.commit()
+
+        session.conn = conn
+        session.db_filename = "collection.anki2"
+        session.deck_id = deck_id
+        session.models = _get_models_legacy(conn)
+
+        card = {
+            "note_id": note_id,
+            "model_id": model_id,
+            "model": "Basic",
+            "fields": {"Front": "", "Back": ""},
+            "created_ts": note_id // 1000,
+            "mod_ts": now,
+            "card_ord": 0,
+        }
+        return session, [card]
 
     def open(self):
         """Extract .apkg, open DB, parse cards. Returns list of card dicts."""
@@ -560,11 +676,14 @@ class DeckSession:
         guid = str(uuid.uuid4())[:10]
         now = int(time.time())
 
-        # Get deck_id from an existing card
+        # Get deck_id from an existing card, or fall back to session deck_id
         row = self.conn.execute("SELECT did FROM cards LIMIT 1").fetchone()
-        if row is None:
+        if row is not None:
+            deck_id = row[0]
+        elif self.deck_id is not None:
+            deck_id = self.deck_id
+        else:
             return {"ok": False, "error": "No cards in deck to determine deck_id"}
-        deck_id = row[0]
 
         # Determine due position
         if position is not None:

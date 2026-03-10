@@ -36,6 +36,11 @@
   const btnFlip = document.getElementById("btn-flip");
   const contextMenu = document.getElementById("context-menu");
   const ctxShowInFinder = document.getElementById("ctx-show-in-finder");
+  const btnCreate = document.getElementById("btn-create");
+  const createDeckOverlay = document.getElementById("create-deck-overlay");
+  const createDeckName = document.getElementById("create-deck-name");
+  const btnCreateCancel = document.getElementById("btn-create-cancel");
+  const btnCreateConfirm = document.getElementById("btn-create-confirm");
 
   let cards = [];
   let displayCards = [];
@@ -976,6 +981,35 @@
 
   // ── Deck loading ──
 
+  async function createNewDeck(deckName) {
+    loading.classList.remove("hidden");
+    try {
+      const result = await pywebview.api.create_new_deck(deckName);
+      if (!result.ok) {
+        alert("Error creating deck: " + result.error);
+        return;
+      }
+      cards = result.cards;
+      models = result.models || {};
+
+      searchInput.value = "";
+      filterImages.value = "all";
+      sortOrder.value = "original";
+      displayCards = cards.slice();
+
+      deckTitle.textContent = cards.length + " cards";
+      buildSidebar();
+
+      dropZone.classList.add("hidden");
+      viewer.classList.remove("hidden");
+      showCard(0);
+    } catch (e) {
+      alert("Failed to create deck: " + e);
+    } finally {
+      loading.classList.add("hidden");
+    }
+  }
+
   async function loadDeck(path) {
     loading.classList.remove("hidden");
     try {
@@ -1076,9 +1110,46 @@
 
   btnBack.addEventListener("click", resetToDropZone);
 
+  // ── Create new deck handlers ──
+
+  btnCreate.addEventListener("click", function () {
+    createDeckName.value = "";
+    createDeckOverlay.classList.remove("hidden");
+    createDeckName.focus();
+  });
+
+  btnCreateCancel.addEventListener("click", function () {
+    createDeckOverlay.classList.add("hidden");
+  });
+
+  btnCreateConfirm.addEventListener("click", function () {
+    var name = createDeckName.value.trim();
+    if (!name) return;
+    createDeckOverlay.classList.add("hidden");
+    createNewDeck(name);
+  });
+
+  createDeckName.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      btnCreateConfirm.click();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      createDeckOverlay.classList.add("hidden");
+    }
+  });
+
   // ── Keyboard navigation ──
 
   document.addEventListener("keydown", function (e) {
+    // Handle Escape for create deck dialog
+    if (!createDeckOverlay.classList.contains("hidden")) {
+      if (e.key === "Escape") {
+        createDeckOverlay.classList.add("hidden");
+      }
+      return;
+    }
+
     // Handle Escape for delete confirmation dialog
     if (!deleteConfirmOverlay.classList.contains("hidden")) {
       if (e.key === "Escape") {

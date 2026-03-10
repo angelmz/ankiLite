@@ -76,6 +76,24 @@ class Api:
             self._close_session()
             return {"ok": False, "error": str(e)}
 
+    def create_new_deck(self, deck_name):
+        """Create a brand-new empty deck and return cards."""
+        try:
+            self._close_session()
+            session, cards = DeckSession.create_new(deck_name)
+            self.session = session
+            models = {}
+            for mid, model in self.session.models.items():
+                models[str(mid)] = {
+                    "name": model["name"],
+                    "templates": model.get("templates", []),
+                    "css": model.get("css", ""),
+                }
+            return {"ok": True, "cards": cards, "models": models}
+        except Exception as e:
+            self._close_session()
+            return {"ok": False, "error": str(e)}
+
     def open_file_dialog(self):
         """Open a native file dialog to select an .apkg file. Returns the path or None."""
         result = window.create_file_dialog(
@@ -165,8 +183,11 @@ class Api:
         """Open a save dialog and export the modified deck."""
         if not self.session:
             return {"ok": False, "error": "No deck loaded"}
-        basename = os.path.splitext(os.path.basename(self.session.apkg_path))[0]
-        default_name = f"{basename}_modified.apkg"
+        if self.session.apkg_path:
+            basename = os.path.splitext(os.path.basename(self.session.apkg_path))[0]
+            default_name = f"{basename}_modified.apkg"
+        else:
+            default_name = "new_deck.apkg"
         result = window.create_file_dialog(
             webview.FileDialog.SAVE,
             save_filename=default_name,
@@ -191,11 +212,15 @@ class Api:
         if not self.session:
             return {"ok": False, "error": "No deck loaded"}
         settings = load_settings()
-        if settings.get("save_mode") == "overwrite":
+        if self.session.apkg_path and settings.get("save_mode") == "overwrite":
             result = self.session.export_apkg(self.session.apkg_path)
         else:
-            # Default: save-as-copy via dialog
+            # save-as dialog (also used when apkg_path is None for new decks)
             result = self.export_apkg()
+
+        # Update apkg_path after first save so future saves work
+        if result.get("ok") and result.get("path") and not self.session.apkg_path:
+            self.session.apkg_path = result["path"]
 
         # Quit after save if setting enabled
         if result.get("ok") and settings.get("quit_on_save"):
@@ -217,6 +242,8 @@ class Api:
         """Overwrite the original file directly."""
         if not self.session:
             return {"ok": False, "error": "No deck loaded"}
+        if not self.session.apkg_path:
+            return self.export_apkg()
         return self.session.export_apkg(self.session.apkg_path)
 
     def get_settings(self):
