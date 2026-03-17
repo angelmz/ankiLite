@@ -41,6 +41,14 @@
   const createDeckName = document.getElementById("create-deck-name");
   const btnCreateCancel = document.getElementById("btn-create-cancel");
   const btnCreateConfirm = document.getElementById("btn-create-confirm");
+  const tagsList = document.getElementById("tags-list");
+  const tagsInput = document.getElementById("tags-input");
+  const importPreviewOverlay = document.getElementById("import-preview-overlay");
+  const importInfo = document.getElementById("import-info");
+  const importSample = document.getElementById("import-sample");
+  const importTarget = document.getElementById("import-target");
+  const btnImportCancel = document.getElementById("btn-import-cancel");
+  const btnImportConfirm = document.getElementById("btn-import-confirm");
 
   let cards = [];
   let displayCards = [];
@@ -52,6 +60,11 @@
   let previewMode = false;
   let previewShowingBack = false;
   let contextMenuPath = null;
+  let selectedFilterTags = [];
+  let pendingImportPath = null;
+  const tagFilterBar = document.getElementById("tag-filter-bar");
+  const tagFilterToggle = document.getElementById("tag-filter-toggle");
+  const tagFilterPills = document.getElementById("tag-filter-pills");
 
   // ── Filter & sort helpers ──
 
@@ -80,12 +93,30 @@
     // Text search
     var query = searchInput.value.trim().toLowerCase();
     if (query) {
+      var tagPrefix = query.startsWith("tag:") ? query.slice(4).trim() : null;
       filtered = filtered.filter(function (card) {
+        if (tagPrefix !== null) {
+          // tag: prefix — only search tags
+          if (!card.tags) return false;
+          return card.tags.some(function (t) { return t.toLowerCase().indexOf(tagPrefix) !== -1; });
+        }
+        // Regular search — match fields AND tags
         var fields = card.fields;
         for (var key in fields) {
           if (fields[key] && stripHtml(fields[key]).toLowerCase().indexOf(query) !== -1) return true;
         }
+        if (card.tags && card.tags.some(function (t) { return t.toLowerCase().indexOf(query) !== -1; })) return true;
         return false;
+      });
+    }
+
+    // Tag filter (intersection — card must have ALL selected tags)
+    if (selectedFilterTags.length > 0) {
+      filtered = filtered.filter(function (card) {
+        if (!card.tags) return false;
+        return selectedFilterTags.every(function (ft) {
+          return card.tags.indexOf(ft) !== -1;
+        });
       });
     }
 
@@ -98,13 +129,24 @@
       filtered.sort(function (a, b) { return b.mod_ts - a.mod_ts; });
     } else if (sort === "modified-asc") {
       filtered.sort(function (a, b) { return a.mod_ts - b.mod_ts; });
+    } else if (sort === "tags") {
+      filtered.sort(function (a, b) {
+        var aTags = (a.tags && a.tags.length) ? a.tags.slice().sort() : null;
+        var bTags = (b.tags && b.tags.length) ? b.tags.slice().sort() : null;
+        if (!aTags && !bTags) return 0;
+        if (!aTags) return 1;
+        if (!bTags) return -1;
+        var aKey = aTags.join("\0").toLowerCase();
+        var bKey = bTags.join("\0").toLowerCase();
+        return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+      });
     }
     // "original" keeps the array order from cards.slice() or filtered
 
     displayCards = filtered;
 
     // Update title
-    if (filter !== "all" || query) {
+    if (filter !== "all" || query || selectedFilterTags.length > 0) {
       deckTitle.textContent = displayCards.length + " of " + cards.length + " cards";
     } else {
       deckTitle.textContent = cards.length + " cards";
@@ -525,6 +567,9 @@
       el.classList.toggle("active", i === index);
     });
 
+    // Render tags
+    renderTags(card);
+
     var activeItem = cardList.querySelector(".card-item.active");
     if (activeItem) {
       activeItem.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -538,6 +583,121 @@
               .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
 
+  // ── Tags UI ──
+
+  function renderTags(card) {
+    tagsList.innerHTML = "";
+    if (!card || !card.tags) return;
+    card.tags.forEach(function (tag) {
+      var pill = document.createElement("span");
+      pill.className = "tag-pill";
+      pill.innerHTML = escapeHtml(tag) + '<button class="tag-remove">&times;</button>';
+      pill.querySelector(".tag-remove").addEventListener("click", function () {
+        removeTag(card, tag);
+      });
+      tagsList.appendChild(pill);
+    });
+  }
+
+  function removeTag(card, tag) {
+    card.tags = card.tags.filter(function (t) { return t !== tag; });
+    renderTags(card);
+    persistTags(card);
+  }
+
+  function persistTags(card) {
+    pywebview.api.update_tags(card.note_id, card.tags)
+      .then(function (res) {
+        if (!res.ok) showToast("Tag save failed: " + res.error);
+        buildTagFilterBar();
+      });
+  }
+
+  function buildTagFilterBar() {
+    tagFilterPills.innerHTML = "";
+    var tagCounts = {};
+    cards.forEach(function (card) {
+      if (!card.tags) return;
+      card.tags.forEach(function (tag) {
+        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      });
+    });
+    var tagNames = Object.keys(tagCounts).sort(function (a, b) {
+      return a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
+    });
+    if (tagNames.length === 0) {
+      tagFilterBar.classList.add("hidden");
+      return;
+    }
+    tagFilterBar.classList.remove("hidden");
+    // Update toggle label with active count
+    var activeCount = selectedFilterTags.length;
+    tagFilterToggle.textContent = activeCount > 0 ? "Tags (" + activeCount + ")" : "Tags";
+    if (activeCount > 0) {
+      tagFilterToggle.classList.add("has-active");
+    } else {
+      tagFilterToggle.classList.remove("has-active");
+    }
+    tagNames.forEach(function (tag) {
+      var pill = document.createElement("button");
+      pill.className = "tag-filter-pill";
+      if (selectedFilterTags.indexOf(tag) !== -1) pill.classList.add("active");
+      pill.textContent = tag + " (" + tagCounts[tag] + ")";
+      pill.addEventListener("click", function () {
+        var idx = selectedFilterTags.indexOf(tag);
+        if (idx !== -1) {
+          selectedFilterTags.splice(idx, 1);
+        } else {
+          selectedFilterTags.push(tag);
+        }
+        var prevNoteId = displayCards[currentIndex] ? displayCards[currentIndex].note_id : null;
+        applyFilterSort();
+        restoreSelection(prevNoteId);
+        buildTagFilterBar();
+      });
+      tagFilterPills.appendChild(pill);
+    });
+  }
+
+  tagFilterToggle.addEventListener("click", function () {
+    tagFilterBar.classList.toggle("expanded");
+    tagFilterPills.classList.toggle("hidden");
+  });
+
+  // ── Create new card helper ──
+
+  function createNewCard() {
+    if (displayCards.length === 0) {
+      showToast("No cards to inherit model from");
+      return;
+    }
+    var selectedCard = displayCards[currentIndex >= 0 ? currentIndex : 0];
+    var modelId = selectedCard.model_id;
+
+    // Find position in master cards array — insert after current card
+    var masterIndex = cards.indexOf(selectedCard);
+    var insertPosition = masterIndex >= 0 ? masterIndex + 1 : cards.length;
+
+    pywebview.api.create_card(modelId, insertPosition)
+      .then(function (res) {
+        if (!res.ok) {
+          showToast("Create failed: " + res.error);
+          return;
+        }
+        // Insert new card at the correct position in master array
+        cards.splice(insertPosition, 0, res.card);
+        // Inherit tags from the card we were on
+        if (selectedCard.tags && selectedCard.tags.length > 0) {
+          res.card.tags = selectedCard.tags.slice();
+          persistTags(res.card);
+        }
+        // Re-apply filter/sort and select the new card
+        applyFilterSort();
+        restoreSelection(res.card.note_id);
+        showToast("Card created");
+      });
+  }
+
   function buildSidebar() {
     cardList.innerHTML = "";
     if (displayCards.length === 0) {
@@ -547,7 +707,23 @@
       cardList.appendChild(empty);
       return;
     }
+    var tagsSorting = sortOrder.value === "tags";
+    var currentGroupLabel = null;
     displayCards.forEach(function (card, i) {
+      // Insert group header when sorting by tags
+      if (tagsSorting) {
+        var groupLabel = (card.tags && card.tags.length)
+          ? card.tags.slice().sort().join(", ")
+          : "Untagged";
+        if (groupLabel !== currentGroupLabel) {
+          currentGroupLabel = groupLabel;
+          var header = document.createElement("div");
+          header.className = "card-group-header";
+          header.textContent = groupLabel;
+          cardList.appendChild(header);
+        }
+      }
+
       const fieldNames = Object.keys(card.fields);
       const front = card.fields[fieldNames[0]] || "";
       const frontText = stripHtml(front).trim().substring(0, 80) || "(empty)";
@@ -909,30 +1085,7 @@
   // ── Create card handler ──
 
   btnAddCard.addEventListener("click", function () {
-    if (displayCards.length === 0) {
-      showToast("No cards to inherit model from");
-      return;
-    }
-    var selectedCard = displayCards[currentIndex >= 0 ? currentIndex : 0];
-    var modelId = selectedCard.model_id;
-
-    // Find position in master cards array — insert after current card
-    var masterIndex = cards.indexOf(selectedCard);
-    var insertPosition = masterIndex >= 0 ? masterIndex + 1 : cards.length;
-
-    pywebview.api.create_card(modelId, insertPosition)
-      .then(function (res) {
-        if (!res.ok) {
-          showToast("Create failed: " + res.error);
-          return;
-        }
-        // Insert new card at the correct position in master array
-        cards.splice(insertPosition, 0, res.card);
-        // Re-apply filter/sort and select the new card
-        applyFilterSort();
-        restoreSelection(res.card.note_id);
-        showToast("Card created");
-      });
+    createNewCard();
   });
 
   // ── Delete card handlers ──
@@ -995,10 +1148,12 @@
       searchInput.value = "";
       filterImages.value = "all";
       sortOrder.value = "original";
+      selectedFilterTags = [];
       displayCards = cards.slice();
 
       deckTitle.textContent = cards.length + " cards";
       buildSidebar();
+      buildTagFilterBar();
 
       dropZone.classList.add("hidden");
       viewer.classList.remove("hidden");
@@ -1029,10 +1184,12 @@
       searchInput.value = "";
       filterImages.value = "all";
       sortOrder.value = "original";
+      selectedFilterTags = [];
       displayCards = cards.slice();
 
       deckTitle.textContent = cards.length + " cards";
       buildSidebar();
+      buildTagFilterBar();
 
       dropZone.classList.add("hidden");
       viewer.classList.remove("hidden");
@@ -1054,6 +1211,7 @@
     editingField = null;
     previewMode = false;
     previewShowingBack = false;
+    selectedFilterTags = [];
     btnEditor.classList.add("active");
     btnPreview.classList.remove("active");
     cardFields.classList.remove("hidden");
@@ -1064,6 +1222,111 @@
     dropZone.classList.remove("hidden");
     loadRecentFiles();  // Refresh recent files list
   }
+
+  // ── Text file import ──
+
+  window._loadTextFromPath = async function (path) {
+    try {
+      const result = await pywebview.api.parse_text_file(path);
+      if (!result.ok) {
+        alert("Error parsing file: " + result.error);
+        return;
+      }
+      pendingImportPath = path;
+
+      // Build info line
+      var delimNames = {tab: "tab-separated", semicolon: "semicolon-separated", comma: "comma-separated"};
+      var info = "Found " + result.rows.length + " cards (" + (delimNames[result.delimiter] || result.delimiter) + ")";
+      if (result.has_header && result.header_row) {
+        info += "<br>Header detected: " + result.header_row.map(escapeHtml).join(", ");
+      }
+      importInfo.innerHTML = info;
+
+      // Build sample table (first 5 rows)
+      var sampleRows = result.rows.slice(0, 5);
+      var numCols = result.num_fields;
+      var tableHtml = "<table><thead><tr>";
+      for (var c = 0; c < numCols; c++) {
+        var header = (result.has_header && result.header_row && result.header_row[c])
+          ? escapeHtml(result.header_row[c])
+          : "Field " + (c + 1);
+        tableHtml += "<th>" + header + "</th>";
+      }
+      tableHtml += "</tr></thead><tbody>";
+      sampleRows.forEach(function (row) {
+        tableHtml += "<tr>";
+        for (var c = 0; c < numCols; c++) {
+          tableHtml += "<td>" + escapeHtml(row[c] || "") + "</td>";
+        }
+        tableHtml += "</tr>";
+      });
+      if (result.rows.length > 5) {
+        tableHtml += '<tr><td colspan="' + numCols + '" style="text-align:center;color:var(--text-secondary);font-style:italic;">... and ' + (result.rows.length - 5) + ' more</td></tr>';
+      }
+      tableHtml += "</tbody></table>";
+      importSample.innerHTML = tableHtml;
+
+      // Show/hide import target radios
+      if (!viewer.classList.contains("hidden") && cards.length > 0) {
+        importTarget.classList.remove("hidden");
+      } else {
+        importTarget.classList.add("hidden");
+      }
+
+      importPreviewOverlay.classList.remove("hidden");
+    } catch (e) {
+      alert("Failed to parse text file: " + e);
+    }
+  };
+
+  async function confirmImport() {
+    var mode = "new";
+    if (!importTarget.classList.contains("hidden")) {
+      var checked = document.querySelector('input[name="import_mode"]:checked');
+      if (checked) mode = checked.value;
+    }
+
+    importPreviewOverlay.classList.add("hidden");
+    loading.classList.remove("hidden");
+
+    try {
+      var result = await pywebview.api.import_text_cards(pendingImportPath, mode);
+      if (!result.ok) {
+        showToast("Import failed: " + result.error);
+        return;
+      }
+      cards = result.cards;
+      models = result.models || {};
+
+      // Reset filter/sort/search
+      searchInput.value = "";
+      filterImages.value = "all";
+      sortOrder.value = "original";
+      selectedFilterTags = [];
+      displayCards = cards.slice();
+
+      deckTitle.textContent = cards.length + " cards";
+      buildSidebar();
+      buildTagFilterBar();
+
+      dropZone.classList.add("hidden");
+      viewer.classList.remove("hidden");
+      if (cards.length > 0) showCard(0);
+      showToast("Imported " + cards.length + " cards");
+    } catch (e) {
+      alert("Import failed: " + e);
+    } finally {
+      loading.classList.add("hidden");
+      pendingImportPath = null;
+    }
+  }
+
+  btnImportCancel.addEventListener("click", function () {
+    importPreviewOverlay.classList.add("hidden");
+    pendingImportPath = null;
+  });
+
+  btnImportConfirm.addEventListener("click", confirmImport);
 
   // ── Drag and drop ──
 
@@ -1099,7 +1362,11 @@
     try {
       const path = await pywebview.api.open_file_dialog();
       if (path) {
-        loadDeck(path);
+        if (path.toLowerCase().endsWith(".txt") || path.toLowerCase().endsWith(".csv")) {
+          window._loadTextFromPath(path);
+        } else {
+          loadDeck(path);
+        }
       }
     } catch (e) {
       alert("Failed to open file dialog: " + e);
@@ -1139,6 +1406,35 @@
     }
   });
 
+  // ── Tags input handlers ──
+
+  tagsInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      var tag = tagsInput.value.trim();
+      if (!tag || currentIndex < 0) return;
+      var card = displayCards[currentIndex];
+      if (!card.tags) card.tags = [];
+      if (card.tags.indexOf(tag) === -1) {
+        card.tags.push(tag);
+        renderTags(card);
+        persistTags(card);
+      }
+      tagsInput.value = "";
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      tagsInput.blur();
+    }
+  });
+
+  tagsInput.addEventListener("focus", function () {
+    editingField = "__tags__";
+  });
+
+  tagsInput.addEventListener("blur", function () {
+    if (editingField === "__tags__") editingField = null;
+  });
+
   // ── Keyboard navigation ──
 
   document.addEventListener("keydown", function (e) {
@@ -1146,6 +1442,15 @@
     if (!createDeckOverlay.classList.contains("hidden")) {
       if (e.key === "Escape") {
         createDeckOverlay.classList.add("hidden");
+      }
+      return;
+    }
+
+    // Handle Escape for import preview dialog
+    if (!importPreviewOverlay.classList.contains("hidden")) {
+      if (e.key === "Escape") {
+        importPreviewOverlay.classList.add("hidden");
+        pendingImportPath = null;
       }
       return;
     }
@@ -1159,6 +1464,13 @@
     }
 
     if (viewer.classList.contains("hidden")) return;
+
+    // Cmd+N: create new card (works even while editing)
+    if ((e.metaKey || e.ctrlKey) && e.key === "n") {
+      e.preventDefault();
+      createNewCard();
+      return;
+    }
 
     // When editing a field, only handle Escape
     if (editingField) {
