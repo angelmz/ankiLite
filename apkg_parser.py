@@ -1,6 +1,7 @@
 """Parse .apkg files (Anki deck packages) and extract cards with inline media."""
 
 import base64
+import csv
 import json
 import mimetypes
 import os
@@ -11,6 +12,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+from collections import Counter
 
 try:
     import zstandard
@@ -427,6 +429,7 @@ class DeckSession:
             "model_id": model_id,
             "model": "Basic",
             "fields": {"Front": "", "Back": ""},
+            "tags": [],
             "created_ts": note_id // 1000,
             "mod_ts": now,
             "card_ord": 0,
@@ -461,13 +464,15 @@ class DeckSession:
             if row[0] not in card_ords:
                 card_ords[row[0]] = row[2]
 
-        notes = self.conn.execute("SELECT id, mid, flds, mod FROM notes").fetchall()
+        notes = self.conn.execute("SELECT id, mid, flds, mod, tags FROM notes").fetchall()
         cards = []
         for note in notes:
             note_id = note[0]
             mid = note[1]
             flds_raw = note[2]
             mod_ts = note[3]
+            tags_raw = note[4]
+            tags = [t for t in tags_raw.strip().split() if t] if tags_raw else []
 
             model = self.models.get(mid)
             if model is None:
@@ -489,6 +494,7 @@ class DeckSession:
                 "model_id": mid,
                 "model": model["name"],
                 "fields": fields,
+                "tags": tags,
                 "created_ts": note_id // 1000,
                 "mod_ts": mod_ts,
                 "card_ord": card_ords.get(note_id, 0),
@@ -723,10 +729,21 @@ class DeckSession:
             "model_id": model_id,
             "model": model["name"],
             "fields": fields,
+            "tags": [],
             "created_ts": note_id // 1000,
             "mod_ts": now,
         }
         return {"ok": True, "card": card}
+
+    def update_tags(self, note_id, tags_list):
+        """Update the tags for a note. tags_list is a list of tag strings."""
+        tags_str = " " + " ".join(tags_list) + " " if tags_list else ""
+        self.conn.execute(
+            "UPDATE notes SET tags = ?, mod = ?, usn = -1 WHERE id = ?",
+            (tags_str, int(time.time()), note_id),
+        )
+        self.conn.commit()
+        return {"ok": True}
 
     def delete_card(self, note_id):
         """Delete a card and its associated note."""
@@ -821,3 +838,91 @@ def parse_apkg(path):
         return session.open()
     finally:
         session.close()
+
+
+HEADER_KEYWORDS = {"front", "back", "question", "answer", "term", "definition", "prompt", "response"}
+
+
+def _detect_delimiter(lines):
+    """Pick the delimiter that produces the most consistent column count across lines."""
+    candidates = [("\t", "tab"), (";", "semicolon"), (",", "comma")]
+    best_delim = ","
+    best_name = "comma"
+    best_score = 0
+
+    for delim, name in candidates:
+        counts = {}
+        for line in lines:
+            cols = len(next(csv.reader([line], delimiter=delim)))
+            if cols > 1:
+                counts[cols] = counts.get(cols, 0) + 1
+        if counts:
+            score = max(counts.values())
+            if score > best_score or (score == best_score and candidates.index((delim, name)) < candidates.index((best_delim, best_name))):
+                best_score = score
+                best_delim = delim
+                best_name = name
+
+    return best_delim, best_name
+
+
+def _detect_header(rows):
+    """Check if the first row looks like a header (contains common field name keywords)."""
+    if len(rows) < 2:
+        return False
+    first = rows[0]
+    rest_col_counts = [len(r) for r in rows[1:]]
+    if not rest_col_counts:
+        return False
+    most_common_count = Counter(rest_col_counts).most_common(1)[0][0]
+    if len(first) != most_common_count:
+        return False
+    return any(cell.strip().lower() in HEADER_KEYWORDS for cell in first)
+
+
+def parse_text_file(path):
+    """Parse a text file (.txt/.csv) and return rows for import preview."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    if raw.startswith(b"\xef\xbb\xbf"):
+        text = raw[3:].decode("utf-8")
+    else:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return {"ok": False, "error": "File is empty"}
+
+    delim, delim_name = _detect_delimiter(lines)
+
+    reader = csv.reader(lines, delimiter=delim)
+    rows = []
+    for row in reader:
+        stripped = [cell.strip() for cell in row]
+        if any(cell for cell in stripped):
+            rows.append(stripped)
+
+    if not rows:
+        return {"ok": False, "error": "File is empty"}
+
+    has_header = _detect_header(rows)
+    header_row = rows[0] if has_header else None
+    data_rows = rows[1:] if has_header else rows
+
+    num_fields = max(len(r) for r in data_rows) if data_rows else 0
+
+    return {
+        "ok": True,
+        "rows": data_rows,
+        "delimiter": delim_name,
+        "has_header": has_header,
+        "header_row": header_row,
+        "num_fields": num_fields,
+    }
