@@ -11,7 +11,7 @@ import tempfile
 
 import webview
 
-from apkg_parser import DeckSession
+from apkg_parser import DeckSession, parse_text_file
 from settings import load_settings, save_settings, add_recent_file
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
@@ -98,7 +98,7 @@ class Api:
         """Open a native file dialog to select an .apkg file. Returns the path or None."""
         result = window.create_file_dialog(
             webview.FileDialog.OPEN,
-            file_types=("Anki Package (*.apkg)",),
+            file_types=("Anki Package (*.apkg)", "Text Files (*.txt;*.csv)"),
         )
         if result and len(result) > 0:
             return result[0]
@@ -287,6 +287,15 @@ class Api:
         save_settings(settings)
         return {"ok": True}
 
+    def update_tags(self, note_id, tags):
+        """Update tags for a note."""
+        if not self.session:
+            return {"ok": False, "error": "No deck loaded"}
+        try:
+            return self.session.update_tags(note_id, tags)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def create_card(self, model_id, position=None):
         """Create a new card with empty fields for the given model."""
         if not self.session:
@@ -302,6 +311,53 @@ class Api:
             return {"ok": False, "error": "No deck loaded"}
         try:
             return self.session.delete_card(note_id)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def parse_text_file(self, path):
+        """Parse a text/CSV file and return preview data."""
+        try:
+            return parse_text_file(path)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def import_text_cards(self, path, mode):
+        """Import cards from a text file. mode is 'new' or 'current'."""
+        try:
+            parsed = parse_text_file(path)
+            if not parsed["ok"]:
+                return parsed
+            rows = parsed["rows"]
+            if not rows:
+                return {"ok": False, "error": "No cards to import"}
+
+            if mode == "new":
+                self._close_session()
+                filename = os.path.splitext(os.path.basename(path))[0]
+                session, _ = DeckSession.create_new(filename)
+                self.session = session
+                # Delete the empty starter card
+                starter_notes = session.conn.execute("SELECT id FROM notes").fetchall()
+                for note in starter_notes:
+                    session.delete_card(note[0])
+                # Bulk insert the parsed rows
+                session.bulk_create_cards(rows)
+            elif mode == "current":
+                if not self.session:
+                    return {"ok": False, "error": "No deck is currently open"}
+                self.session.bulk_create_cards(rows)
+            else:
+                return {"ok": False, "error": f"Unknown mode: {mode}"}
+
+            all_cards = self.session.get_all_cards()
+            models = {}
+            for mid, model in self.session.models.items():
+                models[str(mid)] = {
+                    "name": model["name"],
+                    "templates": model.get("templates", []),
+                    "css": model.get("css", ""),
+                }
+            return {"ok": True, "cards": all_cards, "models": models}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -323,11 +379,17 @@ def _on_drop(e):
         files = e.get("dataTransfer", {}).get("files", [])
         for f in files:
             path = f.get("pywebviewFullPath", "")
-            if path and path.endswith(".apkg"):
-                window.evaluate_js(
-                    f"window._loadDeckFromPath({json.dumps(path)})"
-                )
-                return
+            if path:
+                if path.endswith(".apkg"):
+                    window.evaluate_js(
+                        f"window._loadDeckFromPath({json.dumps(path)})"
+                    )
+                    return
+                elif path.lower().endswith((".txt", ".csv")):
+                    window.evaluate_js(
+                        f"window._loadTextFromPath({json.dumps(path)})"
+                    )
+                    return
     except Exception:
         pass
 
