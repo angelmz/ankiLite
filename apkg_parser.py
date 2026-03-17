@@ -775,6 +775,115 @@ class DeckSession:
         self.conn.commit()
         return {"ok": True}
 
+    def bulk_create_cards(self, rows):
+        """Bulk-insert cards from parsed text rows."""
+        model_id = next(iter(self.models))
+        model = self.models[model_id]
+        field_names = model["fields"]
+
+        row = self.conn.execute("SELECT did FROM cards LIMIT 1").fetchone()
+        if row is not None:
+            deck_id = row[0]
+        elif self.deck_id is not None:
+            deck_id = self.deck_id
+        else:
+            deck_id = 1
+
+        max_due_row = self.conn.execute("SELECT MAX(due) FROM cards").fetchone()
+        next_due = (max_due_row[0] + 1) if max_due_row[0] is not None else 0
+
+        now = int(time.time())
+        max_id_row = self.conn.execute("SELECT MAX(id) FROM notes").fetchone()
+        base_id = max(int(time.time() * 1000), (max_id_row[0] or 0) + 1000)
+        new_cards = []
+
+        for i, text_row in enumerate(rows):
+            note_id = base_id + (i * 2)
+            card_id = note_id + 1
+            guid = str(uuid.uuid4())[:10]
+
+            field_values = []
+            for j in range(len(field_names)):
+                if j < len(text_row):
+                    field_values.append(text_row[j])
+                else:
+                    field_values.append("")
+            flds = "\x1f".join(field_values)
+
+            self.conn.execute(
+                "INSERT INTO notes (id, guid, mid, mod, usn, tags, flds, sfld, csum, flags, data) VALUES (?, ?, ?, ?, -1, '', ?, '', 0, 0, '')",
+                (note_id, guid, model_id, now, flds),
+            )
+            self.conn.execute(
+                "INSERT INTO cards (id, nid, did, ord, mod, usn, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data) VALUES (?, ?, ?, 0, ?, -1, 0, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, '')",
+                (card_id, note_id, deck_id, now, next_due + i),
+            )
+
+            fields = {}
+            for j, name in enumerate(field_names):
+                fields[name] = field_values[j] if j < len(field_values) else ""
+            new_cards.append({
+                "note_id": note_id,
+                "model_id": model_id,
+                "model": model["name"],
+                "fields": fields,
+                "tags": [],
+                "created_ts": note_id // 1000,
+                "mod_ts": now,
+                "card_ord": 0,
+            })
+
+        self.conn.commit()
+        return new_cards
+
+    def get_all_cards(self):
+        """Re-read all cards from DB in due order."""
+        card_positions = {}
+        card_ords = {}
+        for row in self.conn.execute("SELECT nid, due, ord FROM cards ORDER BY due"):
+            if row[0] not in card_positions:
+                card_positions[row[0]] = row[1]
+            if row[0] not in card_ords:
+                card_ords[row[0]] = row[2]
+
+        notes = self.conn.execute("SELECT id, mid, flds, mod, tags FROM notes").fetchall()
+        cards = []
+        for note in notes:
+            note_id = note[0]
+            mid = note[1]
+            flds_raw = note[2]
+            mod_ts = note[3]
+            tags_raw = note[4]
+            tags = [t for t in tags_raw.strip().split() if t] if tags_raw else []
+
+            model = self.models.get(mid)
+            if model is None:
+                continue
+
+            field_values = flds_raw.split("\x1f")
+            field_names = model["fields"]
+
+            fields = {}
+            for i, name in enumerate(field_names):
+                val = field_values[i] if i < len(field_values) else ""
+                val = _strip_sound(val)
+                val = _inline_images(val, self.tmp_dir, self.media_map, self._uri_to_filename)
+                fields[name] = val
+
+            cards.append({
+                "note_id": note_id,
+                "model_id": mid,
+                "model": model["name"],
+                "fields": fields,
+                "tags": tags,
+                "created_ts": note_id // 1000,
+                "mod_ts": mod_ts,
+                "card_ord": card_ords.get(note_id, 0),
+            })
+
+        cards.sort(key=lambda c: card_positions.get(c["note_id"], 0))
+        return cards
+
     def export_apkg(self, output_path):
         """Export the modified deck as a new .apkg file."""
         try:
