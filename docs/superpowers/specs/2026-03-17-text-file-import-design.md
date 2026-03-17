@@ -21,11 +21,11 @@ New standalone function added to the existing parser module.
 
 **Encoding:** Read as UTF-8 (handle BOM). Fall back to latin-1 if UTF-8 decode fails.
 
-**Delimiter detection:**
+**Delimiter detection (consistency-based):**
 1. Read all non-empty lines
-2. If any line contains a tab character → delimiter is `\t`
-3. Else if any line contains a semicolon → delimiter is `;`
-4. Else → delimiter is `,`
+2. For each candidate delimiter (`\t`, `;`, `,`): count how many lines produce the same column count (>1 column) when split by that delimiter
+3. Pick the delimiter with the highest consistency count
+4. Tie-break: prefer tab > semicolon > comma
 
 **Parsing:** Use Python `csv.reader` with the detected delimiter. Skip empty rows. Strip whitespace from each cell.
 
@@ -53,22 +53,23 @@ If detected as header, it is separated from the data rows.
 - Calls the parser function
 - Returns the preview data to JS
 
-**`import_text_cards(rows, mode)`**
-- `mode="new"`: Calls `DeckSession.create_new(filename_stem)`, then bulk-inserts all rows as cards using the Basic model. Returns `{ok, cards, models}`.
-- `mode="current"`: Requires `self.session` to exist. Uses the first model in the session. For each row, creates a note + card in the DB (bulk insert, single commit). Returns `{ok, cards, models}` with the full updated card list.
-
-Bulk insert logic (shared by both modes):
-- Get the target model and its field names
-- For each row: generate note_id, card_id, guid; map columns positionally to fields (pad with empty strings if row has fewer columns than model fields; ignore extra columns); insert into `notes` and `cards` tables
-- Single `conn.commit()` at the end
-- Return all cards in the session (re-read from DB to get consistent state)
+**`import_text_cards(path, mode)`** — Takes the file path (not rows) and mode string. Python re-parses the file to avoid passing large arrays over the JS bridge.
+- Calls `self._close_session()` first if `mode="new"` (prevents temp dir leaks).
+- `mode="new"`: Calls `DeckSession.create_new(filename_stem)`, sets `self.session`, then deletes the empty starter card that `create_new` inserts, then calls `self.session.bulk_create_cards(rows)`. Returns `{ok, cards, models}`.
+- `mode="current"`: Requires `self.session` to exist. Calls `self.session.bulk_create_cards(rows)`. Returns `{ok, cards, models}` with the full updated card list.
 
 New `DeckSession` method: **`bulk_create_cards(rows)`**
 - Takes a list of `[col1, col2, ...]` rows
 - Uses the first model in `self.models`
-- Inserts notes + cards with sequential due values starting after current max
-- Commits once
-- Returns the list of newly created card dicts
+- Resolves `deck_id` from existing cards (`SELECT did FROM cards LIMIT 1`) or falls back to `self.deck_id` (same pattern as existing `create_card`)
+- For each row: generate note_id, card_id, guid; map columns positionally to fields (pad with empty strings if row has fewer columns than model fields; ignore extra columns); insert into `notes` and `cards` tables
+- Sequential due values starting after current max
+- Single `conn.commit()` at the end
+- Returns the list of newly created card dicts (including `card_ord`)
+
+New `DeckSession` method: **`get_all_cards()`**
+- Reads all notes + cards from DB and returns card dicts in due order (same format as `open()` but without ZIP extraction, media map loading, or due normalization — those are already done)
+- Used by `import_text_cards` to return the full card list after bulk insert
 
 ### 3. Frontend changes
 
@@ -83,6 +84,7 @@ New `DeckSession` method: **`bulk_create_cards(rows)`**
 
 **`main.py` — `open_file_dialog`:**
 - Add text file types: `file_types=("Anki Package (*.apkg)", "Text Files (*.txt;*.csv)")`
+- Returns the path as before; the JS caller must check the extension and route to `loadDeck()` or `_loadTextFromPath()` accordingly
 
 **`ui/index.html` — New import preview overlay:**
 ```html
@@ -116,9 +118,20 @@ New `DeckSession` method: **`bulk_create_cards(rows)`**
 
 `confirmImport()`:
 1. Read selected mode from radios (default "new" if no deck open)
-2. Call `pywebview.api.import_text_cards(storedRows, mode)`
+2. Call `pywebview.api.import_text_cards(storedPath, mode)`
 3. On success: hide overlay, call existing deck-rendering logic with returned cards/models
 4. On error: show toast with error message
+
+**JS file dialog routing (`btnOpen` click handler):**
+- After `open_file_dialog()` returns a path, check extension:
+  - `.apkg` → `loadDeck(path)`
+  - `.txt` / `.csv` → `_loadTextFromPath(path)`
+
+**Escape key handling:**
+- Add the import preview overlay to the existing global keydown Escape handler (same pattern as delete-confirm and create-deck overlays)
+
+**Welcome screen text:**
+- Update drop zone text from "Drop an .apkg file here" to also mention `.txt` / `.csv` files
 
 **`ui/style.css`:**
 - Style `#import-preview-panel` matching existing dialog styles (reuse `.confirm-buttons`, panel sizing pattern from delete/create dialogs)
@@ -133,8 +146,8 @@ User drops .txt/.csv
   → Python reads file, detects delimiter/header, returns preview data
   → JS shows import preview dialog
   → User clicks Import
-  → JS calls pywebview.api.import_text_cards(rows, mode)
-  → Python bulk-creates cards (new deck or current session)
+  → JS calls pywebview.api.import_text_cards(path, mode)
+  → Python re-parses file, bulk-creates cards (new deck or current session)
   → Python returns {ok, cards, models}
   → JS renders deck with standard showDeck logic
 ```
@@ -144,6 +157,6 @@ User drops .txt/.csv
 - **Empty file:** Parser returns `{ok: false, error: "File is empty"}`
 - **Single-column file:** Creates cards with only the first field populated
 - **Mismatched column counts:** Pad short rows with empty strings, ignore extra columns beyond model field count
-- **Large files:** No special handling needed — SQLite bulk insert is fast. Preview only shows first 5 rows regardless.
+- **Large files:** Python re-parses the file on import (not passed over JS bridge), so size is only limited by memory. Preview only shows first 5 rows regardless.
 - **Binary/non-text files:** UTF-8 decode failure caught, falls back to latin-1; if still garbage, user sees it in preview and can cancel
 - **File dialog returns .txt when user expected .apkg:** File dialog now shows both types in separate filters, so intent is clear
