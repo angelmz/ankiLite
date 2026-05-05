@@ -98,6 +98,21 @@ def _detect_schema(conn):
     return "legacy"
 
 
+def _table_has_column(conn, table_name, column_name):
+    """Return True when a SQLite table includes the named column."""
+    return any(
+        row[1] == column_name
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    )
+
+
+def _fetch_notes(conn):
+    """Fetch notes with a tags column, defaulting to empty tags for minimal fixtures."""
+    if _table_has_column(conn, "notes", "tags"):
+        return conn.execute("SELECT id, mid, flds, mod, tags FROM notes").fetchall()
+    return conn.execute("SELECT id, mid, flds, mod, '' AS tags FROM notes").fetchall()
+
+
 def _get_models_legacy(conn):
     """Extract model definitions from legacy schema (col.models JSON).
 
@@ -464,7 +479,7 @@ class DeckSession:
             if row[0] not in card_ords:
                 card_ords[row[0]] = row[2]
 
-        notes = self.conn.execute("SELECT id, mid, flds, mod, tags FROM notes").fetchall()
+        notes = _fetch_notes(self.conn)
         cards = []
         for note in notes:
             note_id = note[0]
@@ -846,7 +861,7 @@ class DeckSession:
             if row[0] not in card_ords:
                 card_ords[row[0]] = row[2]
 
-        notes = self.conn.execute("SELECT id, mid, flds, mod, tags FROM notes").fetchall()
+        notes = _fetch_notes(self.conn)
         cards = []
         for note in notes:
             note_id = note[0]

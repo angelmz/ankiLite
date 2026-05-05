@@ -76,6 +76,34 @@
     return false;
   }
 
+  function getCardTitleText(card) {
+    var fieldNames = Object.keys(card.fields);
+    if (fieldNames.length === 0) return "";
+    return stripHtml(card.fields[fieldNames[0]] || "").trim();
+  }
+
+  function getCardOriginalIndex(card) {
+    var index = cards.indexOf(card);
+    return index === -1 ? 9007199254740991 : index;
+  }
+
+  function compareCardTitles(a, b, direction) {
+    var aTitle = getCardTitleText(a);
+    var bTitle = getCardTitleText(b);
+    var aEmpty = aTitle.length === 0;
+    var bEmpty = bTitle.length === 0;
+    if (aEmpty && bEmpty) return getCardOriginalIndex(a) - getCardOriginalIndex(b);
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+
+    var result = aTitle.localeCompare(bTitle, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+    if (result === 0) return getCardOriginalIndex(a) - getCardOriginalIndex(b);
+    return direction === "desc" ? -result : result;
+  }
+
   function applyFilterSort() {
     var filter = filterImages.value;
     var sort = sortOrder.value;
@@ -121,7 +149,11 @@
     }
 
     // Sort
-    if (sort === "created-desc") {
+    if (sort === "alpha-asc") {
+      filtered.sort(function (a, b) { return compareCardTitles(a, b, "asc"); });
+    } else if (sort === "alpha-desc") {
+      filtered.sort(function (a, b) { return compareCardTitles(a, b, "desc"); });
+    } else if (sort === "created-desc") {
       filtered.sort(function (a, b) { return b.created_ts - a.created_ts; });
     } else if (sort === "created-asc") {
       filtered.sort(function (a, b) { return a.created_ts - b.created_ts; });

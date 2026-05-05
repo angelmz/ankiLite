@@ -10,7 +10,7 @@ A lightweight desktop viewer and editor for Anki `.apkg` flashcard decks. Open a
 - **Create & delete cards** — add new cards or remove existing ones without leaving the app
 - **Inline editing** — click any field to edit text and HTML directly; changes save automatically
 - **Image management** — paste from clipboard, add from file (`+img` button), copy to clipboard, or select and delete with backspace
-- **Filter & sort** — filter cards by image content, sort by creation or modification date
+- **Filter & sort** — filter cards by image content, sort alphabetically or by creation/modification date
 - **Save options** — save as a new `.apkg` or overwrite the original, with configurable default behavior
 - **Settings** — configure default save mode (copy vs overwrite) and quit-on-save; persisted in `~/.ankiLite/settings.json`
 - **Zero config** — single `python main.py` to launch; no database setup, no accounts
@@ -53,7 +53,7 @@ Drop an `.apkg` file onto the window, click **Open File** to browse, or pick a d
 Use the dropdowns in the sidebar toolbar to:
 
 - **Filter** — show all cards, only cards with images, or only cards without images
-- **Sort** — original order, newest/oldest created, or newest/oldest modified
+- **Sort** — original order, alphabetical A-Z/Z-A, newest/oldest created, newest/oldest modified, or tags
 
 The header updates to show how many cards match (e.g. "12 of 50 cards").
 
