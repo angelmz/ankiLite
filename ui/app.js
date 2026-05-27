@@ -104,6 +104,65 @@
     return direction === "desc" ? -result : result;
   }
 
+  function parseSearchQuery(rawQuery) {
+    var text = (rawQuery || "").trim();
+    var tagOnly = text.toLowerCase().startsWith("tag:");
+    if (tagOnly) {
+      text = text.slice(4).trim();
+    }
+
+    var exact = text.length >= 2 && text.charAt(0) === '"' && text.charAt(text.length - 1) === '"';
+    if (exact) {
+      text = text.slice(1, -1).trim();
+    }
+
+    return {
+      exact: exact,
+      tagOnly: tagOnly,
+      text: text.toLowerCase(),
+    };
+  }
+
+  function normalizeSearchValue(value, stripMarkup) {
+    var text = String(value || "");
+    if (stripMarkup) {
+      text = stripHtml(text);
+    }
+    return text.trim().toLowerCase();
+  }
+
+  function searchValueMatches(value, query, stripMarkup) {
+    var candidate = normalizeSearchValue(value, stripMarkup);
+    if (query.exact) {
+      return candidate === query.text;
+    }
+    return candidate.indexOf(query.text) !== -1;
+  }
+
+  function cardFieldsMatchSearch(card, query) {
+    var fields = card.fields || {};
+    for (var key in fields) {
+      if (Object.prototype.hasOwnProperty.call(fields, key) && searchValueMatches(fields[key], query, true)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function cardTagsMatchSearch(card, query) {
+    if (!card.tags) return false;
+    return card.tags.some(function (tag) {
+      return searchValueMatches(tag, query, false);
+    });
+  }
+
+  function cardMatchesSearch(card, query) {
+    if (query.tagOnly) {
+      return cardTagsMatchSearch(card, query);
+    }
+    return cardFieldsMatchSearch(card, query) || cardTagsMatchSearch(card, query);
+  }
+
   function applyFilterSort() {
     var filter = filterImages.value;
     var sort = sortOrder.value;
@@ -119,22 +178,10 @@
     }
 
     // Text search
-    var query = searchInput.value.trim().toLowerCase();
-    if (query) {
-      var tagPrefix = query.startsWith("tag:") ? query.slice(4).trim() : null;
+    var query = parseSearchQuery(searchInput.value);
+    if (query.text) {
       filtered = filtered.filter(function (card) {
-        if (tagPrefix !== null) {
-          // tag: prefix — only search tags
-          if (!card.tags) return false;
-          return card.tags.some(function (t) { return t.toLowerCase().indexOf(tagPrefix) !== -1; });
-        }
-        // Regular search — match fields AND tags
-        var fields = card.fields;
-        for (var key in fields) {
-          if (fields[key] && stripHtml(fields[key]).toLowerCase().indexOf(query) !== -1) return true;
-        }
-        if (card.tags && card.tags.some(function (t) { return t.toLowerCase().indexOf(query) !== -1; })) return true;
-        return false;
+        return cardMatchesSearch(card, query);
       });
     }
 
@@ -178,7 +225,7 @@
     displayCards = filtered;
 
     // Update title
-    if (filter !== "all" || query || selectedFilterTags.length > 0) {
+    if (filter !== "all" || query.text || selectedFilterTags.length > 0) {
       deckTitle.textContent = displayCards.length + " of " + cards.length + " cards";
     } else {
       deckTitle.textContent = cards.length + " cards";
